@@ -2,10 +2,10 @@ import { useEffect, useState } from "react";
 import { Link, useSearchParams } from "react-router-dom";
 import {
   CheckCircle,
-  Download,
   Loader,
-  Package,
   AlertCircle,
+  Upload,
+  FileText,
 } from "lucide-react";
 import { supabase } from "../lib/supabase";
 import { useCart } from "../lib/CartContext";
@@ -13,345 +13,390 @@ import { useCart } from "../lib/CartContext";
 export default function Success() {
   const [searchParams] = useSearchParams();
   const sessionId = searchParams.get("session_id");
+  const orderId = searchParams.get("order_id");
+
   const [order, setOrder] = useState(null);
   const [loading, setLoading] = useState(true);
-  const [errorMsg, setErrorMsg] = useState(null);
 
-  // Clear cart on load
+  // Payment Reporting State
+  const [reporting, setReporting] = useState(false);
+  const [reported, setReported] = useState(false);
+
+  // File Upload State
+  const [proofFile, setProofFile] = useState(null);
+  const [uploading, setUploading] = useState(false);
+
   const { cartItems, removeFromCart } = useCart();
+
   useEffect(() => {
     if (cartItems && cartItems.length > 0) {
       cartItems.forEach((i) => removeFromCart(i.id, i.variant));
     }
   }, []);
 
+  // --- NEW: PASTE EVENT LISTENER ---
   useEffect(() => {
-    if (!sessionId) {
-      setLoading(false);
-      return;
-    }
+    const handlePaste = (e) => {
+      // Don't interrupt if reporting is in progress
+      if (reporting || reported) return;
 
+      const items = e.clipboardData?.items;
+      if (!items) return;
+
+      for (let i = 0; i < items.length; i++) {
+        if (items[i].type.indexOf("image") !== -1) {
+          const blob = items[i].getAsFile();
+          // Create a named file from the blob
+          const file = new File([blob], "pasted-screenshot.png", {
+            type: blob.type,
+          });
+          setProofFile(file);
+          break;
+        }
+      }
+    };
+
+    window.addEventListener("paste", handlePaste);
+    return () => window.removeEventListener("paste", handlePaste);
+  }, [reporting, reported]);
+
+  useEffect(() => {
     async function fetchOrder() {
       try {
-        // STRATEGY 1: Try the Edge Function (Standard Way)
-        const { data, error } = await supabase.functions.invoke("checkout", {
-          body: { action: "retrieve", session_id: sessionId },
-        });
-
-        if (!error && data?.session) {
-          setOrder(data.session);
-          return; // Success!
+        let data = null;
+        if (orderId) {
+          const { data: dbOrder, error } = await supabase
+            .from("orders")
+            .select("*, items:order_items(*)")
+            .eq("id", orderId)
+            .single();
+          if (error) throw error;
+          data = dbOrder;
+        } else if (sessionId) {
+          const { data: dbOrder, error } = await supabase
+            .from("orders")
+            .select("*")
+            .eq("stripe_session_id", sessionId)
+            .single();
+          if (error) throw error;
+          data = dbOrder;
         }
 
-        console.warn(
-          "Edge function failed/timed out. Trying fallback...",
-          error
-        );
-
-        // STRATEGY 2: Fallback - Fetch directly from Database
-        // (Useful if the edge function created the order but timed out sending email)
-        const { data: dbOrder, error: dbError } = await supabase
-          .from("orders")
-          .select("*")
-          .eq("stripe_session_id", sessionId)
-          .single();
-
-        if (dbOrder) {
-          // Normalize DB data to match Stripe Session structure for the UI
-          setOrder({
-            payment_intent: dbOrder.id, // Use DB ID as fallback
-            amount_total: Math.round(dbOrder.total_amount * 100), // DB is dollars, UI expects cents
-            total_details: {
-              amount_shipping: Math.round((dbOrder.shipping_cost || 0) * 100),
-            },
-            customer_details: {
-              name: dbOrder.customer_name,
-              email: dbOrder.customer_email,
-            },
-            line_items: {
-              data: Array.isArray(dbOrder.items)
-                ? dbOrder.items.map((item) => ({
-                    id: item.name, // pseudo-id
-                    description: item.name,
-                    quantity: item.quantity,
-                    amount_total:
-                      (item.total || item.unit_price * item.quantity) * 100,
-                  }))
-                : [],
-            },
-            receipt_url: null, // Won't have stripe receipt URL in fallback mode
-          });
-        } else {
-          throw new Error("Order could not be verified.");
+        if (data) {
+          setOrder(data);
+          // If they already reported payment previously
+          if (
+            data.status === "payment_reported" ||
+            data.status === "processing"
+          ) {
+            setReported(true);
+          }
         }
       } catch (err) {
-        console.error("Critical Error fetching order:", err);
-        setErrorMsg(
-          "We received your payment, but the confirmation details are loading slowly."
-        );
+        console.error("Error fetching order:", err);
       } finally {
         setLoading(false);
       }
     }
 
-    fetchOrder();
-  }, [sessionId]);
+    if (sessionId || orderId) fetchOrder();
+    else setLoading(false);
+  }, [sessionId, orderId]);
 
-  if (loading) {
+  // --- HANDLER: Upload File & Notify ---
+  const handlePaymentMade = async () => {
+    if (!order) return;
+
+    // REQUIRE PROOF? (Optional validation)
+    if (!proofFile) {
+      alert(
+        "Please upload or paste a screenshot of your payment confirmation first.",
+      );
+      return;
+    }
+
+    setReporting(true);
+    try {
+      let proofUrl = null;
+
+      // 1. Upload File if selected
+      if (proofFile) {
+        setUploading(true);
+        const fileExt = proofFile.name.split(".").pop();
+        const fileName = `${order.id}-proof.${fileExt}`;
+        const filePath = `${fileName}`;
+
+        const { error: uploadError } = await supabase.storage
+          .from("payment-proofs")
+          .upload(filePath, proofFile, {
+            upsert: true, // Allow overwriting if they retry
+          });
+
+        if (uploadError) throw uploadError;
+
+        const { data } = supabase.storage
+          .from("payment-proofs")
+          .getPublicUrl(filePath);
+
+        proofUrl = data.publicUrl;
+      }
+
+      // 2. Notify Backend (Send Email + Update DB)
+      const { error } = await supabase.functions.invoke("notify-payment", {
+        body: {
+          orderId: order.id,
+          customerName: order.customer_name,
+          amount: order.total_amount,
+          proofUrl: proofUrl, // Pass the URL to backend
+        },
+      });
+
+      if (error) throw error;
+      setReported(true);
+    } catch (err) {
+      console.error(err);
+      alert("Error uploading proof: " + err.message);
+    } finally {
+      setReporting(false);
+      setUploading(false);
+    }
+  };
+
+  if (loading)
     return (
-      <div
-        className="container"
-        style={{ padding: "100px 20px", textAlign: "center" }}
-      >
-        <Loader
-          className="spin-anim"
-          size={40}
-          style={{ margin: "0 auto", color: "var(--primary)" }}
-        />
-        <h3 style={{ marginTop: "20px", color: "var(--medical-navy)" }}>
-          Verifying Payment...
-        </h3>
-        <p style={{ color: "var(--text-muted)" }}>
-          Please do not refresh the page.
-        </p>
+      <div style={{ padding: "100px", textAlign: "center" }}>Loading...</div>
+    );
+
+  if (!order)
+    return (
+      <div style={{ padding: "100px", textAlign: "center" }}>
+        Order Not Found
       </div>
     );
-  }
 
-  // Fallback UI if order is still null but we know payment likely worked
-  if (!order) {
-    return (
-      <div
-        className="container"
-        style={{
-          padding: "100px 20px",
-          textAlign: "center",
-          maxWidth: "600px",
-        }}
-      >
-        <AlertCircle
-          size={60}
-          color="#f59e0b"
-          style={{ margin: "0 auto 20px" }}
-        />
-        <h1 style={{ color: "var(--medical-navy)" }}>Payment Received</h1>
-        <p
-          style={{
-            fontSize: "1.1rem",
-            color: "var(--text-main)",
-            margin: "20px 0",
-          }}
-        >
-          Your order was successful, but we are taking a moment to generate your
-          receipt. Please check your email{" "}
-          <strong>{order?.customer_details?.email}</strong> for confirmation.
-        </p>
-        <div
-          style={{
-            background: "#f8fafc",
-            padding: "15px",
-            borderRadius: "8px",
-            fontSize: "0.9rem",
-            color: "#64748b",
-          }}
-        >
-          Reference: {sessionId.slice(-8)}
-        </div>
-        <Link
-          to="/"
-          className="buy-btn"
-          style={{ maxWidth: "200px", margin: "30px auto" }}
-        >
-          Return Home
-        </Link>
-      </div>
-    );
-  }
-
-  const shippingCost = order.total_details?.amount_shipping
-    ? order.total_details.amount_shipping / 100
-    : 0;
+  const shortOrderId = order.id.slice(0, 8).toUpperCase();
 
   return (
-    <div
-      className="container"
-      style={{ padding: "80px 24px", maxWidth: "800px" }}
-    >
-      <div style={{ textAlign: "center", marginBottom: "50px" }}>
+    <div style={{ padding: "80px 24px", maxWidth: "700px", margin: "0 auto" }}>
+      <div style={{ textAlign: "center", marginBottom: "30px" }}>
         <CheckCircle
-          size={80}
+          size={60}
           color="#10b981"
-          style={{ margin: "0 auto 20px" }}
+          style={{ margin: "0 auto 15px" }}
         />
-        <h1 style={{ fontSize: "2.5rem", color: "var(--medical-navy)" }}>
+        <h1 style={{ color: "#0f172a", margin: "0 0 10px 0" }}>
           Order Confirmed!
         </h1>
-        <p style={{ color: "var(--text-muted)", fontSize: "1.1rem" }}>
-          Thank you, {order.customer_details?.name}. Your order has been
-          received.
+        <p style={{ color: "#64748b", fontSize: "1.1rem", margin: 0 }}>
+          Thank you, {order.customer_name}. We have received your request.
         </p>
-        <div style={{ marginTop: "15px" }}>
-          <Link
-            to="/track"
-            style={{
-              color: "var(--primary)",
-              fontWeight: "600",
-              textDecoration: "underline",
-            }}
-          >
-            Track your order status here
-          </Link>
-        </div>
       </div>
 
       <div
         style={{
-          background: "white",
+          background: "#eff6ff",
           padding: "30px",
           borderRadius: "16px",
-          border: "1px solid var(--border)",
-          boxShadow: "var(--shadow-sm)",
+          border: "2px solid #bfdbfe",
+          boxShadow: "0 10px 15px -3px rgba(0,0,0,0.05)",
         }}
       >
-        <div
+        <h2
           style={{
+            color: "#1e40af",
+            marginTop: 0,
             display: "flex",
-            justifyContent: "space-between",
             alignItems: "center",
-            borderBottom: "1px solid #f1f5f9",
-            paddingBottom: "20px",
-            marginBottom: "20px",
-            flexWrap: "wrap",
-            gap: "10px",
+            gap: "8px",
+            fontSize: "1.4rem",
           }}
         >
-          <div>
-            <span style={{ fontSize: "0.9rem", color: "var(--text-muted)" }}>
-              Order Reference
-            </span>
-            <h3
-              style={{
-                margin: 0,
-                color: "var(--medical-navy)",
-                fontSize: "1.1rem",
-              }}
-            >
-              #
-              {order.payment_intent
-                ? order.payment_intent.slice(-8).toUpperCase()
-                : sessionId.slice(-8)}
-            </h3>
-          </div>
-          {order.receipt_url && (
-            <a
-              href={order.receipt_url}
-              target="_blank"
-              rel="noreferrer"
-              className="buy-btn"
-              style={{
-                width: "auto",
-                padding: "8px 16px",
-                fontSize: "0.85rem",
-                display: "flex",
-                gap: "8px",
-              }}
-            >
-              <Download size={16} /> Receipt
-            </a>
-          )}
-        </div>
-
-        <div style={{ display: "flex", flexDirection: "column", gap: "16px" }}>
-          {order.line_items?.data.map((item, idx) => (
-            <div
-              key={idx}
-              style={{
-                display: "flex",
-                justifyContent: "space-between",
-                alignItems: "center",
-              }}
-            >
-              <div
-                style={{ display: "flex", alignItems: "center", gap: "12px" }}
-              >
-                <div
-                  style={{
-                    background: "#f8fafc",
-                    padding: "10px",
-                    borderRadius: "8px",
-                  }}
-                >
-                  <Package size={20} color="#64748b" />
-                </div>
-                <div>
-                  <div style={{ fontWeight: "600", color: "var(--text-main)" }}>
-                    {item.description}
-                  </div>
-                  <div
-                    style={{ fontSize: "0.85rem", color: "var(--text-muted)" }}
-                  >
-                    Qty: {item.quantity}
-                  </div>
-                </div>
-              </div>
-              <div style={{ fontWeight: "600" }}>
-                ${(item.amount_total / 100).toFixed(2)} AUD
-              </div>
-            </div>
-          ))}
-        </div>
+          <AlertCircle size={24} /> Action Required: Complete Payment
+        </h2>
+        <p style={{ color: "#1e3a8a", fontSize: "1.05rem", lineHeight: "1.5" }}>
+          To finalize your order, please send exactly{" "}
+          <strong>${Number(order.total_amount).toFixed(2)} AUD</strong> using
+          PayID.
+        </p>
 
         <div
           style={{
-            borderTop: "1px solid #f1f5f9",
-            paddingTop: "20px",
-            marginTop: "20px",
+            background: "white",
+            padding: "20px",
+            borderRadius: "12px",
+            border: "1px dashed #93c5fd",
+            margin: "25px 0",
           }}
         >
-          <div
+          <p
             style={{
-              display: "flex",
-              justifyContent: "space-between",
-              alignItems: "center",
-              marginBottom: "10px",
+              margin: "0 0 10px 0",
               color: "#64748b",
+              textTransform: "uppercase",
+              fontSize: "0.85rem",
+              fontWeight: "700",
             }}
           >
-            <span>Shipping</span>
-            <span>${shippingCost.toFixed(2)} AUD</span>
-          </div>
-
-          <div
+            Payment Details
+          </p>
+          <p
             style={{
-              display: "flex",
-              justifyContent: "space-between",
-              alignItems: "center",
+              fontSize: "1.1rem",
+              margin: "0 0 8px 0",
+              color: "#0f172a",
             }}
           >
-            <span style={{ fontWeight: "600" }}>Total Paid</span>
-            <span
+            <strong>PayID Email:</strong>{" "}
+            <span style={{ color: "#3b82f6" }}>
+              info@melbournepeptides.com.au
+            </span>
+          </p>
+          <p style={{ fontSize: "1.1rem", margin: 0, color: "#0f172a" }}>
+            <strong>Reference:</strong>{" "}
+            <span style={{ color: "#e11d48", fontWeight: "800" }}>
+              #{shortOrderId}
+            </span>
+          </p>
+        </div>
+
+        {/* --- UPLOAD SECTION --- */}
+        {!reported ? (
+          <div>
+            <div style={{ marginBottom: "20px" }}>
+              <label
+                htmlFor="proof-upload"
+                style={{
+                  display: "flex",
+                  flexDirection: "column",
+                  alignItems: "center",
+                  justifyContent: "center",
+                  padding: "30px",
+                  background: "white",
+                  border: proofFile
+                    ? "2px solid #10b981"
+                    : "2px dashed #cbd5e1",
+                  borderRadius: "12px",
+                  cursor: "pointer",
+                  transition: "all 0.2s",
+                }}
+                onDragOver={(e) => {
+                  e.preventDefault();
+                  e.currentTarget.style.borderColor = "#3b82f6";
+                }}
+                onDragLeave={(e) => {
+                  e.preventDefault();
+                  if (!proofFile) e.currentTarget.style.borderColor = "#cbd5e1";
+                }}
+                onDrop={(e) => {
+                  e.preventDefault();
+                  e.currentTarget.style.borderColor = "#cbd5e1";
+                  if (e.dataTransfer.files?.[0])
+                    setProofFile(e.dataTransfer.files[0]);
+                }}
+              >
+                {proofFile ? (
+                  <div style={{ textAlign: "center", color: "#10b981" }}>
+                    <FileText size={40} style={{ marginBottom: "10px" }} />
+                    <p style={{ fontWeight: "600", margin: 0 }}>
+                      {proofFile.name}
+                    </p>
+                    <p style={{ fontSize: "0.8rem", color: "#64748b" }}>
+                      Click or Paste (Ctrl+V) to change
+                    </p>
+                  </div>
+                ) : (
+                  <div style={{ textAlign: "center", color: "#64748b" }}>
+                    <Upload
+                      size={40}
+                      style={{ marginBottom: "10px", color: "#94a3b8" }}
+                    />
+                    <p
+                      style={{
+                        fontWeight: "600",
+                        margin: "0 0 5px 0",
+                        color: "#0f172a",
+                      }}
+                    >
+                      Upload Payment Proof
+                    </p>
+                    <p style={{ fontSize: "0.85rem", margin: 0 }}>
+                      Click to Browse or <strong>Paste (Ctrl+V)</strong>{" "}
+                      Screenshot
+                    </p>
+                  </div>
+                )}
+                <input
+                  id="proof-upload"
+                  type="file"
+                  accept="image/*,application/pdf"
+                  hidden
+                  onChange={(e) => {
+                    if (e.target.files?.[0]) setProofFile(e.target.files[0]);
+                  }}
+                />
+              </label>
+            </div>
+
+            <button
+              onClick={handlePaymentMade}
+              disabled={reporting || !proofFile}
               style={{
-                fontSize: "1.5rem",
-                fontWeight: "700",
-                color: "var(--primary)",
+                width: "100%",
+                background: proofFile ? "#10b981" : "#94a3b8",
+                color: "white",
+                padding: "16px",
+                borderRadius: "8px",
+                fontSize: "1.1rem",
+                fontWeight: "bold",
+                border: "none",
+                cursor: proofFile && !reporting ? "pointer" : "not-allowed",
+                display: "flex",
+                justifyContent: "center",
+                alignItems: "center",
+                gap: "10px",
               }}
             >
-              ${(order.amount_total / 100).toFixed(2)} AUD
-            </span>
+              {reporting ? (
+                <>
+                  <Loader className="spin-anim" />
+                  {uploading ? "Uploading Proof..." : "Notifying Team..."}
+                </>
+              ) : (
+                "I Have Made The Payment"
+              )}
+            </button>
           </div>
-        </div>
+        ) : (
+          <div
+            style={{
+              background: "#dcfce7",
+              color: "#166534",
+              padding: "20px",
+              borderRadius: "8px",
+              textAlign: "center",
+              border: "1px solid #bbf7d0",
+            }}
+          >
+            <CheckCircle size={32} style={{ margin: "0 auto 10px" }} />
+            <h3 style={{ margin: "0 0 5px 0" }}>Proof Received!</h3>
+            <p style={{ margin: 0, fontSize: "0.95rem" }}>
+              We are verifying your payment now. You will receive a shipping
+              confirmation email shortly.
+            </p>
+          </div>
+        )}
       </div>
 
       <div style={{ marginTop: "40px", textAlign: "center" }}>
         <Link
           to="/"
           style={{
-            color: "var(--primary)",
+            color: "#64748b",
             fontWeight: "600",
             textDecoration: "none",
           }}
         >
-          Continue Shopping &rarr;
+          &larr; Return to Home
         </Link>
       </div>
     </div>

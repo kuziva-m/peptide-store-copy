@@ -1,62 +1,60 @@
 import { useState, useEffect } from "react";
-import { Truck, Zap, Package } from "lucide-react";
+import { AlertTriangle, Mail, ArrowRight } from "lucide-react";
 import "./AnnouncementBar.css";
 
 export default function AnnouncementBar() {
   const [currentIndex, setCurrentIndex] = useState(0);
 
+  // Split the long message into short, mobile-friendly slides
   const messages = [
     {
       id: 1,
-      text: (
-        <>
-          Standard Shipping{" "}
-          <span className="announcement-highlight">$9.99 AUD</span> (2-6 Days)
-        </>
-      ),
-      icon: <Truck size={18} className="announcement-icon" />,
+      text: "SYSTEM NOTICE: Payment gateway currently offline",
+      icon: <AlertTriangle size={18} className="announcement-icon" />,
     },
     {
       id: 2,
-      text: (
-        <>
-          Free Express Shipping on Orders{" "}
-          <span className="announcement-highlight">Over $250</span>
-        </>
-      ),
-      icon: <Package size={18} className="announcement-icon" />,
+      text: "Please Checkout using 'Manual Order' option",
+      icon: <ArrowRight size={18} className="announcement-icon" />,
     },
     {
       id: 3,
-      text: (
-        <>
-          <span className="announcement-highlight">Express Available</span>{" "}
-          &nbsp;|&nbsp; 1-3 Days Delivery
-        </>
-      ),
-      icon: <Zap size={18} className="announcement-icon" />,
+      text: "Questions? Email info@melbournepeptides.com.au",
+      icon: <Mail size={18} className="announcement-icon" />,
     },
   ];
 
   useEffect(() => {
     const interval = setInterval(() => {
       setCurrentIndex((prevIndex) => (prevIndex + 1) % messages.length);
-    }, 4000); // Change every 4 seconds
+    }, 3500); // Change every 3.5 seconds
 
     return () => clearInterval(interval);
   }, [messages.length]);
 
   return (
-    <div className="announcement-bar">
+    <div
+      className="announcement-bar"
+      style={{ backgroundColor: "#ef4444", color: "white" }} // Forced Red
+    >
       {messages.map((msg, index) => (
         <div
           key={msg.id}
           className={`announcement-content ${
             index === currentIndex ? "active" : ""
           }`}
+          style={{ justifyContent: "center" }}
         >
           {msg.icon}
-          <span>{msg.text}</span>
+          <span
+            style={{
+              fontWeight: "bold",
+              textAlign: "center",
+              fontSize: "0.85rem",
+            }}
+          >
+            {msg.text}
+          </span>
         </div>
       ))}
     </div>

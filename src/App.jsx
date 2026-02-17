@@ -5,7 +5,8 @@ import Footer from "./components/Footer";
 import CartDrawer from "./components/CartDrawer";
 import ScrollToTop from "./components/ScrollToTop";
 import WhatsAppButton from "./components/WhatsAppButton";
-import DiscountPopup from "./components/DiscountPopup";
+// import DiscountPopup from "./components/DiscountPopup"; // Temporarily disabled
+import EmergencyPopup from "./components/EmergencyPopup"; // <--- NEW POPUP
 import Toast from "./components/Toast";
 import AnnouncementBar from "./components/AnnouncementBar";
 
@@ -23,32 +24,28 @@ import Calculator from "./pages/Calculator";
 import TrackOrder from "./pages/TrackOrder";
 import WriteReview from "./pages/WriteReview";
 import Terms from "./pages/Terms";
-import Landing from "./pages/Landing"; // <--- 1. IMPORT LANDING
+import Landing from "./pages/Landing";
+import ManualCheckout from "./pages/ManualCheckout"; // <--- NEW PAGE
 
 function App() {
   const [searchQuery, setSearchQuery] = useState("");
   const location = useLocation();
 
-  // Logic to hide layout elements (Navbar, Footer, etc.)
-  // We hide them if we are in Admin Panel OR on the Landing Page
+  // Hide layout on specific pages
   const isHiddenPage =
-    location.pathname.startsWith("/admin") || location.pathname === "/landing";
+    location.pathname.startsWith("/admin") ||
+    location.pathname === "/landing" ||
+    location.pathname === "/checkout"; // Hide navbar on checkout for focus
 
   return (
     <div
       style={{ display: "flex", flexDirection: "column", minHeight: "100vh" }}
     >
-      {/* HIDE Announcement Bar on Hidden Pages */}
       {!isHiddenPage && <AnnouncementBar />}
-
       <ScrollToTop />
-
-      {/* HIDE Navbar on Hidden Pages */}
       {!isHiddenPage && (
         <Navbar searchQuery={searchQuery} setSearchQuery={setSearchQuery} />
       )}
-
-      {/* HIDE Cart Drawer on Hidden Pages */}
       {!isHiddenPage && <CartDrawer />}
 
       <div style={{ flex: 1 }}>
@@ -66,19 +63,19 @@ function App() {
           <Route path="/terms" element={<Terms />} />
           <Route path="/faq" element={<FAQ />} />
           <Route path="/success" element={<Success />} />
-
-          {/* <--- 2. ADD LANDING ROUTE */}
           <Route path="/landing" element={<Landing />} />
+
+          {/* NEW CHECKOUT ROUTE */}
+          <Route path="/checkout" element={<ManualCheckout />} />
         </Routes>
       </div>
 
       <Toast />
 
-      {/* HIDE Chat & Popups on Hidden Pages */}
-      {!isHiddenPage && <WhatsAppButton />}
-      {!isHiddenPage && <DiscountPopup />}
+      {/* EMERGENCY POPUP ALWAYS ACTIVE */}
+      <EmergencyPopup />
 
-      {/* HIDE Footer on Hidden Pages */}
+      {!isHiddenPage && <WhatsAppButton />}
       {!isHiddenPage && <Footer />}
     </div>
   );

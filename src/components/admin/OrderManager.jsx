@@ -10,8 +10,8 @@ export default function OrderManager() {
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState("");
 
-  // CHANGED: Default filter is now 'paid' instead of 'pending'
-  const [statusFilter, setStatusFilter] = useState("paid");
+  // Default to "unpaid" (includes New + Payment Reported)
+  const [statusFilter, setStatusFilter] = useState("unpaid");
   const [notification, setNotification] = useState(null);
 
   const [modalConfig, setModalConfig] = useState({
@@ -61,49 +61,61 @@ export default function OrderManager() {
   // --- FILTERING LOGIC ---
   const filteredOrders = useMemo(() => {
     return orders.filter((order) => {
-      // 1. EXCLUDE "Ghost" (Abandoned) Orders
-      const isGhost = order.status === "pending" && !order.customer_name;
-      if (isGhost) return false;
-
-      // 2. Search Logic
       const s = search.toLowerCase();
       const matchesSearch =
         order.id.toLowerCase().includes(s) ||
         order.customer_email?.toLowerCase().includes(s) ||
         order.customer_name?.toLowerCase().includes(s);
 
-      // 3. Status Logic
-      // CHANGED: If filter is 'paid', we match 'paid' OR 'pending' (just in case one slips through)
-      const matchesStatus =
-        statusFilter === "all" ||
-        (statusFilter === "paid" &&
-          (order.status === "paid" || order.status === "pending")) ||
-        order.status === statusFilter;
+      let matchesStatus = false;
+
+      if (statusFilter === "all") {
+        matchesStatus = true;
+      } else if (statusFilter === "unpaid") {
+        // Unpaid = New Orders OR Orders where customer clicked "Paid" but you haven't approved yet
+        matchesStatus =
+          order.status === "pending_contact" ||
+          order.status === "payment_reported";
+      } else if (statusFilter === "paid") {
+        // Paid = Approved Orders
+        matchesStatus =
+          order.status === "paid" || order.status === "processing";
+      } else {
+        // label_created, shipped, delivered, cancelled
+        matchesStatus = order.status === statusFilter;
+      }
 
       return matchesSearch && matchesStatus;
     });
   }, [orders, search, statusFilter]);
 
-  // --- STATS LOGIC ---
+  // --- STATS LOGIC (Revenue Fixed) ---
   const stats = useMemo(() => {
-    const liveOrders = orders.filter(
-      (o) => !(o.status === "pending" && !o.customer_name),
+    // Only count ACTUAL REVENUE (Approved/Paid/Shipped orders)
+    // EXCLUDES "payment_reported" until you click Approve
+    const confirmedPaidOrders = orders.filter(
+      (o) =>
+        o.status === "paid" ||
+        o.status === "processing" ||
+        o.status === "label_created" ||
+        o.status === "shipped" ||
+        o.status === "delivered",
     );
 
-    const totalRevenue = liveOrders.reduce(
+    const totalRevenue = confirmedPaidOrders.reduce(
       (sum, o) => sum + (o.total_amount || 0),
       0,
     );
 
-    // CHANGED: "Pending Actions" now counts PAID orders (waiting for label)
-    const actionNeededCount = liveOrders.filter(
-      (o) => o.status === "paid" || o.status === "pending",
+    // Count Action Items (Unpaid/Reported)
+    const unpaidCount = orders.filter(
+      (o) => o.status === "pending_contact" || o.status === "payment_reported",
     ).length;
 
     return {
       totalRevenue,
-      actionNeededCount,
-      totalOrders: liveOrders.length,
+      unpaidCount,
+      totalOrders: confirmedPaidOrders.length,
     };
   }, [orders]);
 
@@ -113,66 +125,78 @@ export default function OrderManager() {
     showToast(`Exported ${filteredOrders.length} orders`);
   };
 
+  const FilterTab = ({ id, label, count, color }) => (
+    <button
+      onClick={() => setStatusFilter(id)}
+      style={{
+        ...styles.filterBtn,
+        background: statusFilter === id ? color || "#0f172a" : "white",
+        color: statusFilter === id ? "white" : "#64748b",
+        borderColor: statusFilter === id ? color || "#0f172a" : "#e2e8f0",
+      }}
+    >
+      {label}
+      {count > 0 && (
+        <span
+          style={{
+            marginLeft: "8px",
+            background: "rgba(255,255,255,0.2)",
+            padding: "2px 6px",
+            borderRadius: "10px",
+            fontSize: "0.7rem",
+            color: statusFilter === id ? "white" : "inherit",
+          }}
+        >
+          {count}
+        </span>
+      )}
+    </button>
+  );
+
   return (
     <div style={{ position: "relative" }}>
       {/* STATS BAR */}
       <div style={styles.statsContainer}>
         <div style={styles.statItem}>
-          <span style={styles.statLabel}>Revenue</span>
-          <span style={styles.statValue}>${stats.totalRevenue.toFixed(2)}</span>
+          <span style={styles.statLabel}>Action Needed (Unpaid)</span>
+          <span style={{ ...styles.statValue, color: "#d97706" }}>
+            {stats.unpaidCount}
+          </span>
         </div>
         <div style={styles.statDivider} />
         <div style={styles.statItem}>
-          <span style={styles.statLabel}>Total Orders</span>
+          <span style={styles.statLabel}>Total Paid Orders</span>
           <span style={styles.statValue}>{stats.totalOrders}</span>
         </div>
         <div style={styles.statDivider} />
         <div style={styles.statItem}>
-          <span style={styles.statLabel}>Pending Actions</span>
-          <span
-            style={{
-              ...styles.statValue,
-              color: stats.actionNeededCount > 0 ? "#d97706" : "inherit",
-            }}
-          >
-            {stats.actionNeededCount}
-          </span>
+          <span style={styles.statLabel}>Verified Revenue</span>
+          <span style={styles.statValue}>${stats.totalRevenue.toFixed(0)}</span>
         </div>
       </div>
 
       <div style={styles.toolbar}>
         <div style={styles.filterGroup}>
-          {/* CHANGED: Removed 'pending', added 'paid' as the first option after 'all' */}
-          {["all", "paid", "label_created", "shipped", "delivered"].map(
-            (status) => (
-              <button
-                key={status}
-                onClick={() => setStatusFilter(status)}
-                style={{
-                  ...styles.filterBtn,
-                  background: statusFilter === status ? "#0f172a" : "white",
-                  color: statusFilter === status ? "white" : "#64748b",
-                  borderColor: statusFilter === status ? "#0f172a" : "#e2e8f0",
-                }}
-              >
-                {status === "paid"
-                  ? "Paid (To Do)"
-                  : status === "label_created"
-                    ? "Label Created"
-                    : status.charAt(0).toUpperCase() + status.slice(1)}
-              </button>
-            ),
-          )}
+          <FilterTab
+            id="unpaid"
+            label="Unpaid"
+            count={stats.unpaidCount}
+            color="#d97706"
+          />
+          <FilterTab id="paid" label="Paid" color="#16a34a" />
+          <FilterTab id="label_created" label="Label Created" />
+          <FilterTab id="shipped" label="Shipped" />
+          <FilterTab id="all" label="All" />
         </div>
 
         <div style={{ display: "flex", gap: "10px", alignItems: "center" }}>
           <button onClick={handleBulkExport} style={styles.exportBtn}>
-            <Download size={16} /> Export View
+            <Download size={16} /> Export
           </button>
           <div style={styles.searchWrapper}>
             <Search size={16} color="#94a3b8" style={{ marginRight: "8px" }} />
             <input
-              placeholder="Search orders..."
+              placeholder="Search..."
               value={search}
               onChange={(e) => setSearch(e.target.value)}
               style={styles.inputReset}
@@ -183,7 +207,7 @@ export default function OrderManager() {
 
       <div style={styles.tableContainer}>
         {loading ? (
-          <div style={styles.emptyState}>Loading orders...</div>
+          <div style={styles.emptyState}>Loading...</div>
         ) : filteredOrders.length === 0 ? (
           <div style={styles.emptyState}>No orders found.</div>
         ) : (
