@@ -1,5 +1,6 @@
-// deno-lint-ignore no-import-prefix
+// deno-lint-ignore-file no-import-prefix
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
+import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -8,31 +9,61 @@ const corsHeaders = {
 };
 
 serve(async (req: Request) => {
-  // 1. Handle CORS (so Tagada can talk to us)
-  if (req.method === "OPTIONS") {
+  if (req.method === "OPTIONS")
     return new Response("ok", { headers: corsHeaders });
-  }
 
   try {
-    // 2. Grab the data Tagada sent
     const payload = await req.json();
+    console.log(
+      "🔔 TAGADA WEBHOOK RECEIVED:",
+      JSON.stringify(payload, null, 2),
+    );
 
-    // 3. LOG IT (This is the most important part)
-    console.log("🔔 TAGADA WEBHOOK RECEIVED:");
-    console.log(JSON.stringify(payload, null, 2));
+    // 1. Extract Order Reference from Metadata (where you send 'ref' in checkout)
+    const orderRef =
+      payload.metadata?.ref || payload.data?.metadata?.ref || payload.ref;
 
-    // 4. Return 200 OK so Tagada knows we got it
+    // 2. Determine if payment was successful
+    const eventType = payload.type;
+    const isSuccess =
+      eventType === "checkout.session.completed" ||
+      eventType === "payment.succeeded" ||
+      payload.data?.status === "paid";
+
+    if (!orderRef) {
+      console.log("ℹ️ Test event or missing ref. No database update needed.");
+      return new Response(JSON.stringify({ received: true }), {
+        status: 200,
+        headers: corsHeaders,
+      });
+    }
+
+    if (isSuccess) {
+      console.log(`✅ Payment Success for Order: ${orderRef}`);
+
+      const supabaseClient = createClient(
+        Deno.env.get("SUPABASE_URL") ?? "",
+        Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") ?? "",
+      );
+
+      // 3. Update Order Status to 'paid' in your orders table
+      const { error } = await supabaseClient
+        .from("orders")
+        .update({ status: "paid" })
+        .eq("id", orderRef);
+
+      if (error) throw error;
+      console.log("🚀 Database updated: Order is now PAID.");
+    }
+
     return new Response(JSON.stringify({ received: true }), {
       headers: { ...corsHeaders, "Content-Type": "application/json" },
       status: 200,
     });
   } catch (err: unknown) {
-    // FIX: Safely extract the error message
-    const errorMessage = err instanceof Error ? err.message : String(err);
-
-    console.error("Webhook Error:", errorMessage);
-
-    return new Response(JSON.stringify({ error: errorMessage }), {
+    const message = err instanceof Error ? err.message : String(err);
+    console.error("❌ Webhook Error:", message);
+    return new Response(JSON.stringify({ error: message }), {
       status: 400,
       headers: { ...corsHeaders, "Content-Type": "application/json" },
     });
