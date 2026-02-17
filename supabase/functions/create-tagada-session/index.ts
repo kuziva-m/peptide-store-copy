@@ -2,9 +2,8 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 
-// --- CONFIGURATION ---
 const STORE_ID = "store_913b2c5a8ee5";
-const TAGADA_BASE_URL = "https://app.tagadapay.com/api/public/v1/checkout/init";
+const TAGADA_BASE_URL = "https://app.tagadapay.com";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -18,13 +17,18 @@ serve(async (req: Request) => {
 
   try {
     const { customer, cart, totals } = await req.json();
+    console.log("📦 STARTING CHECKOUT SESSION:", {
+      email: customer.email,
+      total: totals.total,
+    });
 
+    // 1. Initialize Supabase
     const supabaseClient = createClient(
       Deno.env.get("SUPABASE_URL") ?? "",
       Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") ?? "",
     );
 
-    // 1. Fetch Tagada IDs from Database (if you want to use the IDs you've synced)
+    // 2. Fetch Tagada variant IDs from your DB
     const productIds = cart.map((i: any) => i.id);
     const { data: products } = await supabaseClient
       .from("products")
@@ -32,11 +36,9 @@ serve(async (req: Request) => {
       .in("id", productIds);
 
     const idMap = new Map();
-    if (products) {
-      products.forEach((p: any) => idMap.set(p.id, p.tagada_id));
-    }
+    if (products) products.forEach((p: any) => idMap.set(p.id, p.tagada_id));
 
-    // 2. Create Order in Database
+    // 3. Create Order in Database
     const { data: order, error: orderError } = await supabaseClient
       .from("orders")
       .insert({
@@ -60,55 +62,52 @@ serve(async (req: Request) => {
       .select()
       .single();
 
-    if (orderError) throw new Error("Database Error: " + orderError.message);
+    if (orderError) throw new Error("DB Error: " + orderError.message);
+    console.log("📝 ORDER SAVED:", order.id);
 
-    // 3. CONSTRUCT TAGADA REDIRECT URL (GET Request logic integrated here)
-    const params = new URLSearchParams();
+    // 4. Build Tagada checkout URL using GET /checkout/init (no auth needed)
+    // Items must be JSON-encoded as a query param
+    const items = cart.map((item: any) => ({
+      variantId: idMap.get(item.id),
+      quantity: item.quantity,
+    }));
 
-    // Required Params from Tagada Docs
-    params.set("storeId", STORE_ID);
-    params.set("currency", "AUD");
+    // Check all items have valid variant IDs
+    const missingVariants = items.filter((i: any) => !i.variantId);
+    if (missingVariants.length > 0) {
+      throw new Error(
+        `Missing tagada_id for ${missingVariants.length} product(s) in your DB`,
+      );
+    }
 
-    // Customer Prefill
-    params.set("customerEmail", customer.email);
-    params.set("customerPhone", customer.phone);
+    const nameParts = customer.name.split(" ");
+    const firstName = nameParts[0];
+    const lastName = nameParts.slice(1).join(" ") || "Customer";
 
-    // Split name for prefill
-    const nameParts = customer.name.trim().split(" ");
-    params.set("customerFirstName", nameParts[0]);
-    params.set("customerLastName", nameParts.slice(1).join(" ") || "Customer");
-
-    /**
-     * NOTE: We are mapping your live cart items.
-     * To test specifically with the product ID you provided (product_48dbbd586dbe),
-     * make sure that ID is synced in your Supabase 'products' table in the 'tagada_id' column.
-     */
-    const checkoutItems = cart.map((item: any) => {
-      const tagadaId = idMap.get(item.id);
-      return {
-        // Fallback to the ID you provided if the database isn't synced yet
-        variantId: tagadaId || "product_48dbbd586dbe",
-        quantity: item.quantity,
-      };
+    const params = new URLSearchParams({
+      storeId: STORE_ID,
+      currency: "AUD",
+      items: JSON.stringify(items),
+      customerEmail: customer.email,
+      customerFirstName: firstName,
+      customerLastName: lastName,
+      customerPhone: customer.phone,
+      // Pass order ID so your webhook can match it
+      ref: order.id,
     });
 
-    params.set("items", JSON.stringify(checkoutItems));
+    const checkoutUrl = `${TAGADA_BASE_URL}/api/public/v1/checkout/init?${params.toString()}`;
 
-    // Custom Params for Tracking (This 'ref' must match your webhook logic)
-    params.set("ref", order.id);
+    console.log("✅ CHECKOUT URL BUILT:", checkoutUrl);
 
-    // Build the Final URL using the init endpoint
-    const finalUrl = `${TAGADA_BASE_URL}?${params.toString()}`;
-
-    console.log("Redirecting to:", finalUrl);
-
-    return new Response(JSON.stringify({ url: finalUrl }), {
+    // 5. Return the checkout URL to the frontend
+    return new Response(JSON.stringify({ url: checkoutUrl }), {
       headers: { ...corsHeaders, "Content-Type": "application/json" },
       status: 200,
     });
   } catch (err: unknown) {
     const message = err instanceof Error ? err.message : String(err);
-    console.error("Function Error:", message);
+    console.error("❌ CRITICAL ERROR:", message);
     return new Response(JSON.stringify({ error: message }), {
       status: 400,
       headers: { ...corsHeaders, "Content-Type": "application/json" },
