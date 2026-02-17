@@ -1,6 +1,5 @@
 import { useState } from "react";
 import { supabase } from "../../lib/supabase";
-import { downloadAusPostCSV } from "../../utils/exportToAusPost";
 import { styles } from "./OrderManagerStyles";
 import {
   ExternalLink,
@@ -15,7 +14,6 @@ import {
   Mail,
   User,
   Zap,
-  Download,
   MessageCircle,
   Send,
   Tag,
@@ -39,6 +37,12 @@ export function OrderRow({
   const [emailMode, setEmailMode] = useState(false);
   const [customEmailText, setCustomEmailText] = useState("");
   const [sendingEmail, setSendingEmail] = useState(false);
+
+  // --- NEW: Tracking & Status State ---
+  const [quickTracking, setQuickTracking] = useState(
+    order.tracking_number || "",
+  );
+  const [selectedStatus, setSelectedStatus] = useState("label_created");
 
   const [formData, setFormData] = useState({
     status: order.status,
@@ -67,7 +71,6 @@ export function OrderRow({
     });
   };
 
-  // --- MISSING FUNCTION RESTORED ---
   const sendStatusEmail = async (tracking, statusType) => {
     try {
       const rawItems =
@@ -164,20 +167,30 @@ export function OrderRow({
     }
   };
 
-  const handleQuickStatus = (newStatus) => {
-    let promptMsg = `Mark as ${newStatus}?`;
+  // --- UPDATED: HANDLE STATUS UPDATE WITH TRACKING ---
+  const handleUpdateStatus = () => {
+    if (!selectedStatus) return;
+
+    let promptMsg = `Mark as ${selectedStatus.replace("_", " ")}?`;
+    if (quickTracking) promptMsg += ` (Tracking: ${quickTracking})`;
+
     promptConfirm("Update Status", promptMsg, async () => {
       const { error } = await supabase
         .from("orders")
-        .update({ status: newStatus })
+        .update({
+          status: selectedStatus,
+          tracking_number: quickTracking, // Save tracking number too
+        })
         .eq("id", order.id);
 
       if (!error) {
-        showToast(`Updated to ${newStatus}`);
+        showToast(`Updated to ${selectedStatus}`);
 
-        // Send email notification for shipping updates
-        if (["label_created", "shipped", "delivered"].includes(newStatus)) {
-          await sendStatusEmail(order.tracking_number, newStatus);
+        // Send email if it's a shipping update
+        if (
+          ["label_created", "shipped", "delivered"].includes(selectedStatus)
+        ) {
+          await sendStatusEmail(quickTracking, selectedStatus);
         }
 
         onUpdate();
@@ -472,54 +485,98 @@ export function OrderRow({
                 </div>
               </div>
 
-              {/* --- ACTION BUTTONS (At Bottom of Customer Column) --- */}
+              {/* --- ACTION AREA (Restored & Improved) --- */}
               <div
                 style={{
                   marginTop: "auto",
                   display: "flex",
                   flexDirection: "column",
-                  gap: "8px",
+                  gap: "10px",
+                  background: "#f8fafc",
+                  padding: "12px",
+                  borderRadius: "8px",
+                  border: "1px solid #e2e8f0",
                 }}
               >
-                {/* 1. Mark Label Created (Only if Paid) */}
-                {(order.status === "paid" || order.status === "processing") && (
-                  <button
-                    onClick={() => handleQuickStatus("label_created")}
+                {/* 1. Tracking Input */}
+                <div>
+                  <label
                     style={{
-                      ...styles.actionBtn,
-                      background: "#f0fdf4",
-                      color: "#15803d",
-                      borderColor: "#bbf7d0",
-                      width: "100%",
-                      padding: "12px",
+                      fontSize: "0.75rem",
+                      fontWeight: "bold",
+                      color: "#64748b",
+                      display: "block",
+                      marginBottom: "4px",
                     }}
                   >
-                    Mark Label Created
-                  </button>
-                )}
+                    Tracking Number
+                  </label>
+                  <input
+                    placeholder="Paste AusPost tracking here..."
+                    value={quickTracking}
+                    onChange={(e) => setQuickTracking(e.target.value)}
+                    style={{
+                      ...styles.input,
+                      width: "100%",
+                      background: "white",
+                    }}
+                  />
+                </div>
 
-                {/* 2. Mark Shipped (Only if Label Created) */}
-                {order.status === "label_created" && (
-                  <button
-                    onClick={() => handleQuickStatus("shipped")}
+                {/* 2. Status Dropdown */}
+                <div>
+                  <label
                     style={{
-                      ...styles.actionBtn,
-                      background: "#eff6ff",
-                      color: "#1d4ed8",
-                      borderColor: "#dbeafe",
-                      width: "100%",
-                      padding: "12px",
+                      fontSize: "0.75rem",
+                      fontWeight: "bold",
+                      color: "#64748b",
+                      display: "block",
+                      marginBottom: "4px",
                     }}
                   >
-                    Mark Shipped
-                  </button>
-                )}
+                    Update Status
+                  </label>
+                  <select
+                    value={selectedStatus}
+                    onChange={(e) => setSelectedStatus(e.target.value)}
+                    style={{
+                      ...styles.input,
+                      width: "100%",
+                      background: "white",
+                    }}
+                  >
+                    <option value="paid">Paid (Processing)</option>
+                    <option value="label_created">Label Created</option>
+                    <option value="shipped">Shipped</option>
+                    <option value="delivered">Delivered</option>
+                  </select>
+                </div>
+
+                {/* 3. Confirm Button */}
+                <button
+                  onClick={handleUpdateStatus}
+                  style={{
+                    ...styles.actionBtn,
+                    background: "#0f172a",
+                    color: "white",
+                    borderColor: "#0f172a",
+                    width: "100%",
+                    padding: "10px",
+                    marginTop: "5px",
+                  }}
+                >
+                  Update & Email Customer
+                </button>
 
                 <button
                   onClick={() => setIsEditing(true)}
-                  style={styles.secondaryBtn}
+                  style={{
+                    ...styles.secondaryBtn,
+                    width: "100%",
+                    marginTop: "10px",
+                  }}
                 >
-                  <Edit2 size={14} /> Edit Order Details
+                  <Edit2 size={14} /> Edit Full Order Details
                 </button>
               </div>
             </div>
