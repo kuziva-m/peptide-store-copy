@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState } from "react";
 import { useCart } from "../lib/CartContext";
 import { supabase } from "../lib/supabase";
 import { useNavigate } from "react-router-dom";
@@ -6,11 +6,11 @@ import {
   ArrowLeft,
   Lock,
   Loader,
-  CheckCircle,
-  Truck,
-  Zap,
+  CreditCard,
   Tag,
   X,
+  Truck,
+  Zap,
 } from "lucide-react";
 
 export default function ManualCheckout() {
@@ -35,7 +35,6 @@ export default function ManualCheckout() {
   const [shippingMethod, setShippingMethod] = useState("standard");
 
   // --- CALCULATIONS ---
-  // 1. Discount
   let discountAmount = 0;
   if (appliedDiscount) {
     if (appliedDiscount.type === "percentage") {
@@ -46,12 +45,10 @@ export default function ManualCheckout() {
   }
   const subtotalAfterDiscount = Math.max(0, cartTotal - discountAmount);
 
-  // 2. Shipping Thresholds
   const codeGrantsFreeShip = appliedDiscount?.free_shipping === true;
   const isStandardFree = subtotalAfterDiscount >= 150 || codeGrantsFreeShip;
   const isExpressFree = subtotalAfterDiscount >= 250 || codeGrantsFreeShip;
 
-  // 3. Shipping Cost
   const shippingCost = (() => {
     if (shippingMethod === "express") return isExpressFree ? 0 : 14.99;
     return isStandardFree ? 0 : 9.99;
@@ -94,14 +91,15 @@ export default function ManualCheckout() {
     setLoading(true);
 
     try {
+      // 1. Call Backend to Create Order & Get Payment Link
       const { data, error } = await supabase.functions.invoke(
-        "create-manual-order",
+        "create-tagada-session",
         {
           body: {
             customer: formData,
             cart: cart,
             totals: {
-              subtotal: subtotalAfterDiscount, // Send the discounted subtotal
+              subtotal: subtotalAfterDiscount,
               shipping: shippingCost,
               total: grandTotal,
               discountUsed: appliedDiscount?.code || null,
@@ -114,12 +112,15 @@ export default function ManualCheckout() {
 
       if (error) throw error;
 
-      clearCart();
-      navigate(`/success?order_id=${data.orderId}`);
+      // 2. Redirect User to Tagada Payment Page
+      if (data?.url) {
+        window.location.href = data.url;
+      } else {
+        throw new Error("Payment URL not found");
+      }
     } catch (err) {
       console.error(err);
-      alert("Error placing order: " + err.message);
-    } finally {
+      alert("Checkout Error: " + err.message);
       setLoading(false);
     }
   };
@@ -159,35 +160,27 @@ export default function ManualCheckout() {
 
       <div
         style={{
-          background: "#eff6ff",
+          background: "#f8fafc",
           padding: "15px",
           borderRadius: "8px",
-          border: "1px solid #bfdbfe",
+          border: "1px solid #e2e8f0",
           marginBottom: "30px",
         }}
       >
         <h3
           style={{
             margin: "0 0 5px 0",
-            color: "#1e40af",
+            color: "#0f172a",
             display: "flex",
             alignItems: "center",
             gap: "8px",
           }}
         >
-          <Lock size={16} /> Secure Manual Checkout
+          <Lock size={16} /> Secure Checkout
         </h3>
-        <p
-          style={{
-            margin: 0,
-            fontSize: "0.9rem",
-            color: "#1e3a8a",
-            lineHeight: "1.5",
-          }}
-        >
-          Orders are currently processed manually. Your order will be sent to{" "}
-          <strong>info@melbournepeptides.com.au</strong>, and payment will be
-          arranged via email shortly.
+        <p style={{ margin: 0, fontSize: "0.9rem", color: "#64748b" }}>
+          Complete your purchase securely. You will be redirected to our payment
+          partner.
         </p>
       </div>
 
@@ -274,7 +267,7 @@ export default function ManualCheckout() {
           </div>
         </section>
 
-        {/* 3. ORDER OPTIONS (Discount & Shipping) */}
+        {/* 3. ORDER OPTIONS */}
         <section
           style={{
             background: "#f8fafc",
@@ -285,19 +278,9 @@ export default function ManualCheckout() {
         >
           <h3 style={{ marginTop: 0 }}>Order Options</h3>
 
-          {/* Discount Input */}
+          {/* Discount */}
           <div style={{ marginBottom: "20px" }}>
-            <label
-              style={{
-                fontSize: "0.9rem",
-                fontWeight: "600",
-                color: "#64748b",
-                marginBottom: "8px",
-                display: "block",
-              }}
-            >
-              Discount Code
-            </label>
+            <label style={styles.label}>Discount Code</label>
             {!appliedDiscount ? (
               <div style={{ display: "flex", gap: "10px" }}>
                 <input
@@ -309,31 +292,13 @@ export default function ManualCheckout() {
                 <button
                   type="button"
                   onClick={handleApplyCoupon}
-                  style={{
-                    padding: "0 20px",
-                    background: "#3b82f6",
-                    color: "white",
-                    border: "none",
-                    borderRadius: "6px",
-                    cursor: "pointer",
-                    fontWeight: "600",
-                  }}
+                  style={styles.applyBtn}
                 >
                   Apply
                 </button>
               </div>
             ) : (
-              <div
-                style={{
-                  display: "flex",
-                  alignItems: "center",
-                  justifyContent: "space-between",
-                  background: "#dcfce7",
-                  padding: "10px",
-                  borderRadius: "6px",
-                  color: "#166534",
-                }}
-              >
+              <div style={styles.appliedTag}>
                 <span
                   style={{
                     display: "flex",
@@ -374,37 +339,18 @@ export default function ManualCheckout() {
             )}
           </div>
 
-          {/* Shipping Selection */}
+          {/* Shipping */}
           <div>
-            <label
-              style={{
-                fontSize: "0.9rem",
-                fontWeight: "600",
-                color: "#64748b",
-                marginBottom: "8px",
-                display: "block",
-              }}
-            >
-              Shipping Method
-            </label>
+            <label style={styles.label}>Shipping Method</label>
             <div
               style={{ display: "flex", flexDirection: "column", gap: "10px" }}
             >
-              {/* Standard */}
               <div
                 onClick={() => setShippingMethod("standard")}
                 style={{
-                  display: "flex",
-                  alignItems: "center",
-                  justifyContent: "space-between",
-                  padding: "12px",
-                  borderRadius: "8px",
-                  border:
-                    shippingMethod === "standard"
-                      ? "2px solid #3b82f6"
-                      : "1px solid #cbd5e1",
-                  background: "white",
-                  cursor: "pointer",
+                  ...styles.shipOption,
+                  borderColor:
+                    shippingMethod === "standard" ? "#3b82f6" : "#cbd5e1",
                 }}
               >
                 <div
@@ -430,21 +376,12 @@ export default function ManualCheckout() {
                 </div>
               </div>
 
-              {/* Express */}
               <div
                 onClick={() => setShippingMethod("express")}
                 style={{
-                  display: "flex",
-                  alignItems: "center",
-                  justifyContent: "space-between",
-                  padding: "12px",
-                  borderRadius: "8px",
-                  border:
-                    shippingMethod === "express"
-                      ? "2px solid #3b82f6"
-                      : "1px solid #cbd5e1",
-                  background: "white",
-                  cursor: "pointer",
+                  ...styles.shipOption,
+                  borderColor:
+                    shippingMethod === "express" ? "#3b82f6" : "#cbd5e1",
                 }}
               >
                 <div
@@ -483,15 +420,7 @@ export default function ManualCheckout() {
         >
           <h3 style={{ marginTop: 0 }}>Summary</h3>
           {cart.map((item) => (
-            <div
-              key={item.id + item.variant}
-              style={{
-                display: "flex",
-                justifyContent: "space-between",
-                marginBottom: "10px",
-                fontSize: "0.9rem",
-              }}
-            >
+            <div key={item.id + item.variant} style={styles.summaryItem}>
               <span>
                 {item.name} x {item.quantity}
               </span>
@@ -501,26 +430,22 @@ export default function ManualCheckout() {
           <div
             style={{ borderTop: "1px solid #e2e8f0", margin: "15px 0" }}
           ></div>
-
           <div style={styles.row}>
             <span>Subtotal</span>
             <span>${cartTotal.toFixed(2)}</span>
           </div>
-
           {appliedDiscount && (
             <div style={{ ...styles.row, color: "#16a34a" }}>
-              <span>Discount ({appliedDiscount.code})</span>
+              <span>Discount</span>
               <span>-${discountAmount.toFixed(2)}</span>
             </div>
           )}
-
           <div style={styles.row}>
             <span>Shipping</span>
             <span>
               {shippingCost === 0 ? "Free" : `$${shippingCost.toFixed(2)}`}
             </span>
           </div>
-
           <div
             style={{
               ...styles.row,
@@ -535,29 +460,12 @@ export default function ManualCheckout() {
           </div>
         </section>
 
-        <button
-          type="submit"
-          disabled={loading}
-          style={{
-            background: "#0f172a",
-            color: "white",
-            padding: "16px",
-            borderRadius: "8px",
-            fontSize: "1.1rem",
-            fontWeight: "bold",
-            border: "none",
-            cursor: loading ? "wait" : "pointer",
-            display: "flex",
-            justifyContent: "center",
-            alignItems: "center",
-            gap: "10px",
-          }}
-        >
+        <button type="submit" disabled={loading} style={styles.payBtn}>
           {loading ? (
             <Loader className="spin-anim" />
           ) : (
             <>
-              <CheckCircle /> Confirm Order
+              <CreditCard /> Pay Now
             </>
           )}
         </button>
@@ -584,5 +492,60 @@ const styles = {
     display: "flex",
     justifyContent: "space-between",
     marginBottom: "5px",
+  },
+  label: {
+    fontSize: "0.9rem",
+    fontWeight: "600",
+    color: "#64748b",
+    marginBottom: "8px",
+    display: "block",
+  },
+  applyBtn: {
+    padding: "0 20px",
+    background: "#3b82f6",
+    color: "white",
+    border: "none",
+    borderRadius: "6px",
+    cursor: "pointer",
+    fontWeight: "600",
+  },
+  appliedTag: {
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "space-between",
+    background: "#dcfce7",
+    padding: "10px",
+    borderRadius: "6px",
+    color: "#166534",
+  },
+  shipOption: {
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "space-between",
+    padding: "12px",
+    borderRadius: "8px",
+    border: "1px solid #cbd5e1",
+    background: "white",
+    cursor: "pointer",
+  },
+  summaryItem: {
+    display: "flex",
+    justifyContent: "space-between",
+    marginBottom: "10px",
+    fontSize: "0.9rem",
+  },
+  payBtn: {
+    background: "#0f172a",
+    color: "white",
+    padding: "16px",
+    borderRadius: "8px",
+    fontSize: "1.1rem",
+    fontWeight: "bold",
+    border: "none",
+    cursor: "pointer",
+    display: "flex",
+    justifyContent: "center",
+    alignItems: "center",
+    gap: "10px",
   },
 };
