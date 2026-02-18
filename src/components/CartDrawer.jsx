@@ -1,7 +1,16 @@
 import { useState, useEffect } from "react";
-import { X, Minus, Plus, ShoppingBag, ArrowRight, Trash2 } from "lucide-react";
+import {
+  X,
+  Minus,
+  Plus,
+  ShoppingBag,
+  ArrowRight,
+  Trash2,
+  Loader,
+} from "lucide-react";
 import { useCart } from "../lib/CartContext";
 import { useNavigate } from "react-router-dom";
+import { supabase } from "../lib/supabase"; // Import Supabase
 import "./CartDrawer.css";
 
 export default function CartDrawer() {
@@ -14,6 +23,7 @@ export default function CartDrawer() {
     cartTotal = 0,
   } = useCart();
   const navigate = useNavigate();
+  const [isLoading, setIsLoading] = useState(false); // Loading state
 
   // Helper
   const getVariantLabel = (v) => {
@@ -34,10 +44,35 @@ export default function CartDrawer() {
     };
   }, [isCartOpen]);
 
-  // --- MANUAL CHECKOUT HANDLER ---
-  const handleManualCheckout = () => {
-    toggleCart();
-    navigate("/checkout"); // Redirects to your new Manual Page
+  // --- DIRECT TAGADA CHECKOUT ---
+  const handleCheckout = async () => {
+    try {
+      setIsLoading(true);
+
+      const { data, error } = await supabase.functions.invoke(
+        "create-tagada-session",
+        {
+          body: {
+            cart,
+            totals: { total: cartTotal },
+            customer: {}, // Empty customer, Tagada will collect this
+          },
+        },
+      );
+
+      if (error) throw error;
+
+      if (data?.url) {
+        window.location.href = data.url; // Redirect to Tagada
+      } else {
+        alert("Could not initiate checkout. Please try again.");
+      }
+    } catch (err) {
+      console.error("Checkout Error:", err);
+      alert("Error starting checkout. Please try again.");
+    } finally {
+      setIsLoading(false);
+    }
   };
 
   if (!isCartOpen) return null;
@@ -139,19 +174,22 @@ export default function CartDrawer() {
                 <span>Subtotal</span>
                 <span className="big-price">${cartTotal.toFixed(2)}</span>
               </div>
-              <p
-                style={{
-                  fontSize: "0.8rem",
-                  color: "#64748b",
-                  marginBottom: "10px",
-                }}
-              >
-                Shipping calculated at next step.
-              </p>
+              <p className="shipping-note">Shipping calculated at checkout.</p>
 
-              {/* UPDATED BUTTON: Goes to Manual Checkout */}
-              <button onClick={handleManualCheckout} className="checkout-btn">
-                Secure Checkout <ArrowRight size={18} />
+              <button
+                onClick={handleCheckout}
+                className="checkout-btn"
+                disabled={isLoading}
+              >
+                {isLoading ? (
+                  <>
+                    <Loader className="spin-anim" size={18} /> Redirecting...
+                  </>
+                ) : (
+                  <>
+                    Checkout Now <ArrowRight size={18} />
+                  </>
+                )}
               </button>
             </div>
           </>

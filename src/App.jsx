@@ -5,8 +5,7 @@ import Footer from "./components/Footer";
 import CartDrawer from "./components/CartDrawer";
 import ScrollToTop from "./components/ScrollToTop";
 import WhatsAppButton from "./components/WhatsAppButton";
-// import DiscountPopup from "./components/DiscountPopup"; // Temporarily disabled
-import EmergencyPopup from "./components/EmergencyPopup"; // <--- NEW POPUP
+import EmergencyPopup from "./components/EmergencyPopup";
 import Toast from "./components/Toast";
 import AnnouncementBar from "./components/AnnouncementBar";
 
@@ -25,7 +24,7 @@ import TrackOrder from "./pages/TrackOrder";
 import WriteReview from "./pages/WriteReview";
 import Terms from "./pages/Terms";
 import Landing from "./pages/Landing";
-import ManualCheckout from "./pages/ManualCheckout"; // <--- NEW PAGE
+// Removed ManualCheckout import
 
 function App() {
   const [searchQuery, setSearchQuery] = useState("");
@@ -33,9 +32,7 @@ function App() {
 
   // Hide layout on specific pages
   const isHiddenPage =
-    location.pathname.startsWith("/admin") ||
-    location.pathname === "/landing" ||
-    location.pathname === "/checkout"; // Hide navbar on checkout for focus
+    location.pathname.startsWith("/admin") || location.pathname === "/landing";
 
   return (
     <div
@@ -64,15 +61,11 @@ function App() {
           <Route path="/faq" element={<FAQ />} />
           <Route path="/success" element={<Success />} />
           <Route path="/landing" element={<Landing />} />
-
-          {/* NEW CHECKOUT ROUTE */}
-          <Route path="/checkout" element={<ManualCheckout />} />
+          {/* Removed Checkout Route */}
         </Routes>
       </div>
 
       <Toast />
-
-      {/* EMERGENCY POPUP ALWAYS ACTIVE */}
       <EmergencyPopup />
 
       {!isHiddenPage && <WhatsAppButton />}

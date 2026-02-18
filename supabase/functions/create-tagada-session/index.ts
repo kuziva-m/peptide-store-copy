@@ -4,6 +4,8 @@ import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 
 const STORE_ID = "store_913b2c5a8ee5";
 const TAGADA_BASE_URL = "https://app.tagadapay.com";
+// We define your site URL here to ensure redirects go to the right place
+const SITE_URL = "https://melbournepeptides.com.au";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -16,10 +18,13 @@ serve(async (req: Request) => {
     return new Response("ok", { headers: corsHeaders });
 
   try {
+    // 1. Parse Input
     const { customer, cart, totals } = await req.json();
+
     console.log("📦 STARTING CHECKOUT SESSION:", {
-      email: customer.email,
+      items: cart.length,
       total: totals.total,
+      hasCustomer: !!customer,
     });
 
     const supabaseClient = createClient(
@@ -27,17 +32,19 @@ serve(async (req: Request) => {
       Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") ?? "",
     );
 
-    // 2. Fetch Tagada variant IDs from variants table (cart items have variantId)
-    const variantIds = cart.map((i: any) => i.variantId);
+    // 2. Fetch Tagada variant IDs from variants table
+    const variantIds = cart.map((i: any) => i.variantId || i.id);
+
     const { data: variants, error: variantError } = await supabaseClient
       .from("variants")
-      .select("id, tagada_id, product_id")
+      .select("id, tagada_id")
       .in("id", variantIds);
 
-    if (variantError)
+    if (variantError) {
+      console.error("DB Error fetching variants:", variantError);
       throw new Error("DB Error fetching variants: " + variantError.message);
+    }
 
-    // Build map: supabase variant id -> tagada variant id
     const idMap = new Map();
     if (variants) variants.forEach((v: any) => idMap.set(v.id, v.tagada_id));
 
@@ -45,21 +52,23 @@ serve(async (req: Request) => {
     const { data: order, error: orderError } = await supabaseClient
       .from("orders")
       .insert({
-        customer_email: customer.email,
-        customer_name: customer.name,
-        shipping_address: {
-          line1: customer.line1,
-          city: customer.city,
-          state: customer.state,
-          postal_code: customer.postcode,
-          country: "AU",
-          phone: customer.phone,
-        },
-        status: "pending_contact",
+        customer_email: customer?.email || null,
+        customer_name: customer?.name || null,
+        shipping_address: customer?.line1
+          ? {
+              line1: customer.line1,
+              city: customer.city,
+              state: customer.state,
+              postal_code: customer.postcode,
+              country: "AU",
+              phone: customer.phone,
+            }
+          : null,
+        status: "pending_details",
         total_amount: totals.total,
-        shipping_cost: totals.shipping,
-        shipping_method: totals.shippingMethod,
-        discount_code: totals.discountUsed,
+        shipping_cost: totals.shipping || 0,
+        shipping_method: totals.shippingMethod || "standard",
+        items: cart,
         created_at: new Date().toISOString(),
       })
       .select()
@@ -68,46 +77,45 @@ serve(async (req: Request) => {
     if (orderError) throw new Error("DB Error: " + orderError.message);
     console.log("📝 ORDER SAVED:", order.id);
 
-    // 4. Build items array using variantId from cart
-    const items = cart.map((item: any) => ({
-      variantId: idMap.get(item.variantId),
-      quantity: item.quantity,
-    }));
+    // 4. Build Items for Tagada URL
+    const items = cart.map((item: any) => {
+      const vId = item.variantId || item.id;
+      const tagadaId = idMap.get(vId);
 
-    // Check all items have valid tagada variant IDs
-    const missingVariants = items.filter((i: any) => !i.variantId);
-    if (missingVariants.length > 0) {
-      // Log which ones are missing to help debug
-      cart.forEach((item: any) => {
-        const tagadaId = idMap.get(item.variantId);
-        if (!tagadaId) {
-          console.error(
-            `❌ Missing tagada_id for supabase variant id: ${item.variantId}`,
-          );
-        }
-      });
-      throw new Error(
-        `Missing tagada_id for ${missingVariants.length} variant(s). Check variants table.`,
-      );
-    }
+      if (!tagadaId) {
+        console.warn(
+          `⚠️ Missing Tagada ID for Variant ${vId}. Using fallback or it may fail.`,
+        );
+      }
 
-    const nameParts = customer.name.trim().split(" ");
-    const firstName = nameParts[0];
-    const lastName = nameParts.slice(1).join(" ") || "Customer";
+      return {
+        variantId: tagadaId || "MISSING_TAGADA_ID",
+        quantity: item.quantity,
+      };
+    });
 
+    // 5. Construct URL with Success Redirect
     const params = new URLSearchParams({
       storeId: STORE_ID,
       currency: "AUD",
       items: JSON.stringify(items),
-      customerEmail: customer.email,
-      customerFirstName: firstName,
-      customerLastName: lastName,
-      customerPhone: customer.phone,
       ref: order.id,
+      // 👇 This tells Tagada where to send them after payment
+      successUrl: `${SITE_URL}/success?order_id=${order.id}`,
+      // 👇 This tells Tagada where to send them if they click "Cancel"
+      cancelUrl: `${SITE_URL}/shop`,
     });
 
+    if (customer?.email) params.set("customerEmail", customer.email);
+    if (customer?.phone) params.set("customerPhone", customer.phone);
+    if (customer?.name) {
+      const parts = customer.name.trim().split(" ");
+      params.set("customerFirstName", parts[0]);
+      params.set("customerLastName", parts.slice(1).join(" ") || "");
+    }
+
     const checkoutUrl = `${TAGADA_BASE_URL}/api/public/v1/checkout/init?${params.toString()}`;
-    console.log("✅ CHECKOUT URL BUILT:", checkoutUrl);
+    console.log("✅ REDIRECT URL GENERATED:", checkoutUrl);
 
     return new Response(JSON.stringify({ url: checkoutUrl }), {
       headers: { ...corsHeaders, "Content-Type": "application/json" },
