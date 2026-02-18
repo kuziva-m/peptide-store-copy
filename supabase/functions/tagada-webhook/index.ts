@@ -19,64 +19,82 @@ serve(async (req: Request) => {
       JSON.stringify(payload, null, 2),
     );
 
-    // 1. Extract Order ID (ref)
-    // Tagada might send this in a few different places depending on the exact event
-    const orderRef =
-      payload.metadata?.ref ||
-      payload.data?.metadata?.ref ||
-      payload.referenceId ||
-      payload.data?.referenceId;
-
-    // 2. Check if the event means "Payment Successful"
     const eventType = payload.type || payload.event;
-    const paymentStatus = payload.data?.status || payload.status;
-
-    const isSuccess =
-      eventType === "checkout.session.completed" ||
-      eventType === "payment.succeeded" ||
-      paymentStatus === "paid" ||
-      paymentStatus === "succeeded";
-
-    if (!orderRef) {
-      console.log(
-        "ℹ️ Test event or missing order reference. Skipping DB update.",
-      );
+    if (eventType !== "order/paid") {
       return new Response(JSON.stringify({ received: true }), {
         status: 200,
         headers: corsHeaders,
       });
     }
 
-    if (isSuccess) {
-      console.log(`✅ Payment Success! Updating Order: ${orderRef}`);
+    const tagadaOrderId = payload.data?.orderId;
+    const tagadaPaymentId = payload.data?.paymentId;
+    const cartToken = payload.data?.cartToken;
 
-      const supabaseClient = createClient(
-        Deno.env.get("SUPABASE_URL") ?? "",
-        Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") ?? "",
-      );
-
-      // 3. Update Order Status to 'paid'
-      const { error } = await supabaseClient
-        .from("orders")
-        .update({ status: "paid" })
-        .eq("id", orderRef);
-
-      if (error) throw error;
-      console.log("🚀 Database updated: Order is now PAID.");
-    } else {
-      console.log("ℹ️ Event received, but not a successful payment trigger.");
+    if (!tagadaOrderId && !tagadaPaymentId && !cartToken) {
+      throw new Error("No identifying IDs found in Tagada payload");
     }
 
+    const supabaseClient = createClient(
+      Deno.env.get("SUPABASE_URL") ?? "",
+      Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") ?? "",
+    );
+
+    let supabaseOrderId = null;
+
+    // 1. Did Tagada mirror our custom token?
+    if (cartToken && cartToken.length > 10) {
+      supabaseOrderId = cartToken;
+    }
+    // 2. Bypass API Bug: Find the order using the Tagada ID we saved during checkout
+    else if (tagadaOrderId || tagadaPaymentId) {
+      console.log(
+        `🔍 Searching DB for Tagada ID: ${tagadaOrderId || tagadaPaymentId}`,
+      );
+      const { data: matchedOrder } = await supabaseClient
+        .from("orders")
+        .select("id")
+        .or(
+          `stripe_session_id.eq.${tagadaOrderId},stripe_session_id.eq.${tagadaPaymentId}`,
+        )
+        .single();
+
+      if (matchedOrder) supabaseOrderId = matchedOrder.id;
+    }
+
+    if (!supabaseOrderId) {
+      console.error(
+        "❌ CRITICAL: Could not find matching Supabase order for this webhook.",
+      );
+      return new Response(JSON.stringify({ error: "Order link not found" }), {
+        status: 200,
+        headers: corsHeaders,
+      });
+    }
+
+    console.log(
+      `✅ Link found! Tagada Event = Supabase Order ${supabaseOrderId}`,
+    );
+
+    // 3. Mark the Order as Paid!
+    const { error } = await supabaseClient
+      .from("orders")
+      .update({ status: "paid" })
+      .eq("id", supabaseOrderId);
+
+    if (error) throw error;
+    console.log("🚀 Database updated: Order is now PAID.");
+
     return new Response(JSON.stringify({ received: true }), {
-      headers: { ...corsHeaders, "Content-Type": "application/json" },
       status: 200,
+      headers: corsHeaders,
     });
   } catch (err: unknown) {
     const message = err instanceof Error ? err.message : String(err);
     console.error("❌ Webhook Error:", message);
     return new Response(JSON.stringify({ error: message }), {
       status: 400,
-      headers: { ...corsHeaders, "Content-Type": "application/json" },
+      headers: corsHeaders,
     });
   }
 });
