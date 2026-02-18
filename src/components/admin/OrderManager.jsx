@@ -10,8 +10,8 @@ export default function OrderManager() {
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState("");
 
-  // Default to "unpaid" (includes New + Payment Reported)
-  const [statusFilter, setStatusFilter] = useState("unpaid");
+  // Default to "paid" since manual checkouts are gone
+  const [statusFilter, setStatusFilter] = useState("paid");
   const [notification, setNotification] = useState(null);
 
   const [modalConfig, setModalConfig] = useState({
@@ -71,17 +71,10 @@ export default function OrderManager() {
 
       if (statusFilter === "all") {
         matchesStatus = true;
-      } else if (statusFilter === "unpaid") {
-        // Unpaid = New Orders OR Orders where customer clicked "Paid" but you haven't approved yet
-        matchesStatus =
-          order.status === "pending_contact" ||
-          order.status === "payment_reported";
       } else if (statusFilter === "paid") {
-        // Paid = Approved Orders
         matchesStatus =
           order.status === "paid" || order.status === "processing";
       } else {
-        // label_created, shipped, delivered, cancelled
         matchesStatus = order.status === statusFilter;
       }
 
@@ -89,10 +82,9 @@ export default function OrderManager() {
     });
   }, [orders, search, statusFilter]);
 
-  // --- STATS LOGIC (Revenue Fixed) ---
+  // --- STATS LOGIC ---
   const stats = useMemo(() => {
     // Only count ACTUAL REVENUE (Approved/Paid/Shipped orders)
-    // EXCLUDES "payment_reported" until you click Approve
     const confirmedPaidOrders = orders.filter(
       (o) =>
         o.status === "paid" ||
@@ -107,14 +99,8 @@ export default function OrderManager() {
       0,
     );
 
-    // Count Action Items (Unpaid/Reported)
-    const unpaidCount = orders.filter(
-      (o) => o.status === "pending_contact" || o.status === "payment_reported",
-    ).length;
-
     return {
       totalRevenue,
-      unpaidCount,
       totalOrders: confirmedPaidOrders.length,
     };
   }, [orders]);
@@ -125,7 +111,7 @@ export default function OrderManager() {
     showToast(`Exported ${filteredOrders.length} orders`);
   };
 
-  const FilterTab = ({ id, label, count, color }) => (
+  const FilterTab = ({ id, label, color }) => (
     <button
       onClick={() => setStatusFilter(id)}
       style={{
@@ -136,20 +122,6 @@ export default function OrderManager() {
       }}
     >
       {label}
-      {count > 0 && (
-        <span
-          style={{
-            marginLeft: "8px",
-            background: "rgba(255,255,255,0.2)",
-            padding: "2px 6px",
-            borderRadius: "10px",
-            fontSize: "0.7rem",
-            color: statusFilter === id ? "white" : "inherit",
-          }}
-        >
-          {count}
-        </span>
-      )}
     </button>
   );
 
@@ -158,32 +130,19 @@ export default function OrderManager() {
       {/* STATS BAR */}
       <div style={styles.statsContainer}>
         <div style={styles.statItem}>
-          <span style={styles.statLabel}>Action Needed (Unpaid)</span>
-          <span style={{ ...styles.statValue, color: "#d97706" }}>
-            {stats.unpaidCount}
-          </span>
-        </div>
-        <div style={styles.statDivider} />
-        <div style={styles.statItem}>
           <span style={styles.statLabel}>Total Paid Orders</span>
           <span style={styles.statValue}>{stats.totalOrders}</span>
         </div>
         <div style={styles.statDivider} />
         <div style={styles.statItem}>
-          <span style={styles.statLabel}>Verified Revenue</span>
+          <span style={styles.statLabel}>Total Revenue</span>
           <span style={styles.statValue}>${stats.totalRevenue.toFixed(0)}</span>
         </div>
       </div>
 
       <div style={styles.toolbar}>
         <div style={styles.filterGroup}>
-          <FilterTab
-            id="unpaid"
-            label="Unpaid"
-            count={stats.unpaidCount}
-            color="#d97706"
-          />
-          <FilterTab id="paid" label="Paid" color="#16a34a" />
+          <FilterTab id="paid" label="New (Paid)" color="#16a34a" />
           <FilterTab id="label_created" label="Label Created" />
           <FilterTab id="shipped" label="Shipped" />
           <FilterTab id="all" label="All" />

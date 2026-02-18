@@ -4,7 +4,6 @@ import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 
 const STORE_ID = "store_913b2c5a8ee5";
 const TAGADA_BASE_URL = "https://app.tagadapay.com";
-// We define your site URL here to ensure redirects go to the right place
 const SITE_URL = "https://melbournepeptides.com.au";
 
 const corsHeaders = {
@@ -18,7 +17,6 @@ serve(async (req: Request) => {
     return new Response("ok", { headers: corsHeaders });
 
   try {
-    // 1. Parse Input
     const { customer, cart, totals } = await req.json();
 
     console.log("📦 STARTING CHECKOUT SESSION:", {
@@ -32,7 +30,7 @@ serve(async (req: Request) => {
       Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") ?? "",
     );
 
-    // 2. Fetch Tagada variant IDs from variants table
+    // Fetch Tagada variant IDs from variants table
     const variantIds = cart.map((i: any) => i.variantId || i.id);
 
     const { data: variants, error: variantError } = await supabaseClient
@@ -48,7 +46,7 @@ serve(async (req: Request) => {
     const idMap = new Map();
     if (variants) variants.forEach((v: any) => idMap.set(v.id, v.tagada_id));
 
-    // 3. Create Order in Database
+    // Create Order in Database
     const { data: order, error: orderError } = await supabaseClient
       .from("orders")
       .insert({
@@ -77,32 +75,26 @@ serve(async (req: Request) => {
     if (orderError) throw new Error("DB Error: " + orderError.message);
     console.log("📝 ORDER SAVED:", order.id);
 
-    // 4. Build Items for Tagada URL
+    // Build Items for Tagada URL
     const items = cart.map((item: any) => {
       const vId = item.variantId || item.id;
       const tagadaId = idMap.get(vId);
-
       if (!tagadaId) {
-        console.warn(
-          `⚠️ Missing Tagada ID for Variant ${vId}. Using fallback or it may fail.`,
-        );
+        console.warn(`⚠️ Missing Tagada ID for Variant ${vId}.`);
       }
-
       return {
         variantId: tagadaId || "MISSING_TAGADA_ID",
         quantity: item.quantity,
       };
     });
 
-    // 5. Construct URL with Success Redirect
+    // Construct checkout URL
     const params = new URLSearchParams({
       storeId: STORE_ID,
       currency: "AUD",
       items: JSON.stringify(items),
       ref: order.id,
-      // 👇 This tells Tagada where to send them after payment
-      successUrl: `${SITE_URL}/success?order_id=${order.id}`,
-      // 👇 This tells Tagada where to send them if they click "Cancel"
+      returnUrl: `${SITE_URL}/success?order_id=${order.id}`,
       cancelUrl: `${SITE_URL}/shop`,
     });
 
