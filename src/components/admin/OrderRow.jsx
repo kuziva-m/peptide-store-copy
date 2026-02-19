@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useMemo } from "react";
 import { supabase } from "../../lib/supabase";
 import { styles } from "./OrderManagerStyles";
 import {
@@ -38,7 +38,7 @@ export function OrderRow({
   const [customEmailText, setCustomEmailText] = useState("");
   const [sendingEmail, setSendingEmail] = useState(false);
 
-  // --- NEW: Tracking & Status State ---
+  // --- Tracking & Status State ---
   const [quickTracking, setQuickTracking] = useState(
     order.tracking_number || "",
   );
@@ -58,6 +58,25 @@ export function OrderRow({
     country: order.shipping_address?.country || "AU",
   });
 
+  // 🛡️ SAFELY PARSE ITEMS 🛡️
+  // Handles stringified JSON from the new system, or arrays from the old system
+  const displayItems = useMemo(() => {
+    try {
+      if (order.order_items && order.order_items.length > 0) {
+        return order.order_items; // Old checkout format
+      } else if (order.items) {
+        // If it was saved as a string, parse it into a real array
+        return typeof order.items === "string"
+          ? JSON.parse(order.items)
+          : order.items;
+      }
+      return [];
+    } catch (e) {
+      console.error("Error parsing order items:", e);
+      return [];
+    }
+  }, [order.order_items, order.items]);
+
   const formatAUSDate = (dateString) => {
     if (!dateString) return "N/A";
     return new Date(dateString).toLocaleString("en-AU", {
@@ -73,21 +92,20 @@ export function OrderRow({
 
   const sendStatusEmail = async (tracking, statusType) => {
     try {
-      const rawItems =
-        order.order_items && order.order_items.length > 0
-          ? order.order_items
-          : order.items;
-      const emailItems = rawItems.map((item) => {
-        let name =
-          item.product_name_snapshot ||
-          item.description ||
-          item.name ||
-          "Unknown Product";
+      const emailItems = displayItems.map((item) => {
+        let name = item.product_name_snapshot || item.name || "Product";
         let size = "";
+
         if (item.variants && item.variants.products) {
           name = item.variants.products.name;
           size = item.variants.size_label;
+        } else if (item.variant) {
+          size =
+            typeof item.variant === "string"
+              ? item.variant
+              : item.variant.size_label || "";
         }
+
         return { name, quantity: item.quantity, size };
       });
 
@@ -167,7 +185,6 @@ export function OrderRow({
     }
   };
 
-  // --- UPDATED: HANDLE STATUS UPDATE WITH TRACKING ---
   const handleUpdateStatus = () => {
     if (!selectedStatus) return;
 
@@ -179,20 +196,17 @@ export function OrderRow({
         .from("orders")
         .update({
           status: selectedStatus,
-          tracking_number: quickTracking, // Save tracking number too
+          tracking_number: quickTracking,
         })
         .eq("id", order.id);
 
       if (!error) {
         showToast(`Updated to ${selectedStatus}`);
-
-        // Send email if it's a shipping update
         if (
           ["label_created", "shipped", "delivered"].includes(selectedStatus)
         ) {
           await sendStatusEmail(quickTracking, selectedStatus);
         }
-
         onUpdate();
       }
     });
@@ -208,6 +222,7 @@ export function OrderRow({
           label: "Verify Payment",
         };
       case "pending_contact":
+      case "pending_payment":
         return {
           bg: "#fefce8",
           color: "#854d0e",
@@ -259,7 +274,6 @@ export function OrderRow({
 
   return (
     <div style={styles.orderRow}>
-      {/* HEADER */}
       <div
         style={styles.rowHeader}
         onClick={() => !isEditing && setIsExpanded(!isExpanded)}
@@ -293,10 +307,8 @@ export function OrderRow({
         </button>
       </div>
 
-      {/* EXPANDED PANEL */}
       {isExpanded && (
         <div style={styles.expandedPanel}>
-          {/* --- PAYMENT PROOF / APPROVAL SECTION --- */}
           {(order.status === "payment_reported" ||
             order.status === "pending_contact") && (
             <div
@@ -328,7 +340,6 @@ export function OrderRow({
                   ? "Payment Reported - Verify Now"
                   : "Mark as Paid"}
               </h4>
-
               <div
                 style={{
                   display: "flex",
@@ -337,7 +348,6 @@ export function OrderRow({
                   alignItems: "center",
                 }}
               >
-                {/* VIEW SCREENSHOT BUTTON */}
                 {order.receipt_url ? (
                   <a
                     href={order.receipt_url}
@@ -371,7 +381,6 @@ export function OrderRow({
                     <XCircle size={18} /> No Screenshot Sent
                   </span>
                 )}
-
                 <div
                   style={{ display: "flex", gap: "8px", marginLeft: "auto" }}
                 >
@@ -417,24 +426,42 @@ export function OrderRow({
                 <Package size={14} /> Items
               </div>
               <div style={styles.itemsTable}>
-                {(order.order_items || order.items || []).map((item, i) => (
-                  <div key={i} style={styles.itemRow}>
-                    <span style={styles.itemQty}>{item.quantity}x</span>
-                    <div style={styles.itemInfo}>
-                      <span style={styles.itemName}>
-                        {item.product_name_snapshot || item.name || "Product"}
-                      </span>
-                      {item.variants && (
-                        <span style={styles.variantLabel}>
-                          {item.variants.size_label}
-                        </span>
-                      )}
-                    </div>
-                    <span style={styles.itemPrice}>
-                      ${(item.price_at_purchase || 0).toFixed(2)}
-                    </span>
+                {displayItems.length === 0 ? (
+                  <div style={{ padding: "10px", color: "#64748b" }}>
+                    No items recorded.
                   </div>
-                ))}
+                ) : (
+                  displayItems.map((item, i) => {
+                    let sizeText = "";
+                    if (item.variants?.size_label)
+                      sizeText = item.variants.size_label;
+                    else if (typeof item.variant === "string")
+                      sizeText = item.variant;
+                    else if (item.variant?.size_label)
+                      sizeText = item.variant.size_label;
+
+                    const price = item.price_at_purchase || item.price || 0;
+
+                    return (
+                      <div key={i} style={styles.itemRow}>
+                        <span style={styles.itemQty}>{item.quantity}x</span>
+                        <div style={styles.itemInfo}>
+                          <span style={styles.itemName}>
+                            {item.product_name_snapshot ||
+                              item.name ||
+                              "Product"}
+                          </span>
+                          {sizeText && (
+                            <span style={styles.variantLabel}>{sizeText}</span>
+                          )}
+                        </div>
+                        <span style={styles.itemPrice}>
+                          ${price.toFixed(2)}
+                        </span>
+                      </div>
+                    );
+                  })
+                )}
               </div>
 
               <div style={{ marginTop: "20px" }}>
@@ -485,7 +512,6 @@ export function OrderRow({
                 </div>
               </div>
 
-              {/* --- ACTION AREA (Restored & Improved) --- */}
               <div
                 style={{
                   marginTop: "auto",
@@ -498,7 +524,6 @@ export function OrderRow({
                   border: "1px solid #e2e8f0",
                 }}
               >
-                {/* 1. Tracking Input */}
                 <div>
                   <label
                     style={{
@@ -522,8 +547,6 @@ export function OrderRow({
                     }}
                   />
                 </div>
-
-                {/* 2. Status Dropdown */}
                 <div>
                   <label
                     style={{
@@ -551,8 +574,6 @@ export function OrderRow({
                     <option value="delivered">Delivered</option>
                   </select>
                 </div>
-
-                {/* 3. Confirm Button */}
                 <button
                   onClick={handleUpdateStatus}
                   style={{
@@ -567,7 +588,6 @@ export function OrderRow({
                 >
                   Update & Email Customer
                 </button>
-
                 <button
                   onClick={() => setIsEditing(true)}
                   style={{

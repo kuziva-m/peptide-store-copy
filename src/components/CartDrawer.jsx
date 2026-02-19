@@ -1,16 +1,7 @@
-import { useState, useEffect } from "react";
-import {
-  X,
-  Minus,
-  Plus,
-  ShoppingBag,
-  ArrowRight,
-  Trash2,
-  Loader,
-} from "lucide-react";
+import { useEffect } from "react";
+import { X, Minus, Plus, ShoppingBag, ArrowRight, Trash2 } from "lucide-react";
 import { useCart } from "../lib/CartContext";
 import { useNavigate } from "react-router-dom";
-import { supabase } from "../lib/supabase"; // Import Supabase
 import "./CartDrawer.css";
 
 export default function CartDrawer() {
@@ -23,7 +14,6 @@ export default function CartDrawer() {
     cartTotal = 0,
   } = useCart();
   const navigate = useNavigate();
-  const [isLoading, setIsLoading] = useState(false); // Loading state
 
   // Helper
   const getVariantLabel = (v) => {
@@ -44,35 +34,10 @@ export default function CartDrawer() {
     };
   }, [isCartOpen]);
 
-  // --- DIRECT TAGADA CHECKOUT ---
-  const handleCheckout = async () => {
-    try {
-      setIsLoading(true);
-
-      const { data, error } = await supabase.functions.invoke(
-        "create-tagada-session",
-        {
-          body: {
-            cart,
-            totals: { total: cartTotal },
-            customer: {}, // Empty customer, Tagada will collect this
-          },
-        },
-      );
-
-      if (error) throw error;
-
-      if (data?.url) {
-        window.location.href = data.url; // Redirect to Tagada
-      } else {
-        alert("Could not initiate checkout. Please try again.");
-      }
-    } catch (err) {
-      console.error("Checkout Error:", err);
-      alert("Error starting checkout. Please try again.");
-    } finally {
-      setIsLoading(false);
-    }
+  // --- CHANGED: Now redirects to our new Checkout page ---
+  const handleCheckoutClick = () => {
+    toggleCart(); // Close the drawer
+    navigate("/checkout"); // Go to the address/discount page
   };
 
   if (!isCartOpen) return null;
@@ -176,20 +141,8 @@ export default function CartDrawer() {
               </div>
               <p className="shipping-note">Shipping calculated at checkout.</p>
 
-              <button
-                onClick={handleCheckout}
-                className="checkout-btn"
-                disabled={isLoading}
-              >
-                {isLoading ? (
-                  <>
-                    <Loader className="spin-anim" size={18} /> Redirecting...
-                  </>
-                ) : (
-                  <>
-                    Checkout Now <ArrowRight size={18} />
-                  </>
-                )}
+              <button onClick={handleCheckoutClick} className="checkout-btn">
+                Checkout <ArrowRight size={18} />
               </button>
             </div>
           </>

@@ -1,3 +1,4 @@
+// deno-lint-ignore-file no-explicit-any
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 
 const RESEND_API_KEY = Deno.env.get("RESEND_API_KEY");
@@ -13,6 +14,8 @@ interface OrderItem {
   name: string;
   quantity: number;
   size?: string;
+  variant?: any;
+  productName?: string;
 }
 
 serve(async (req: Request) => {
@@ -77,20 +80,40 @@ serve(async (req: Request) => {
     `
       : "";
 
-    // 3. Items HTML
+    // 3. Items HTML (WITH THE FIX)
     const itemsList = Array.isArray(items)
       ? items
-          .map(
-            (item: any) => `
-      <tr style="border-bottom: 1px solid #f1f5f9;">
-        <td style="padding: 10px 0; color: #334155;">
-          <strong>${item.name || "Product"}</strong>
-          ${item.size ? `<span style="color: #64748b; font-size: 13px;"> (${item.size})</span>` : ""}
-        </td>
-        <td style="padding: 10px 0; text-align: right; font-weight: 600;">x${item.quantity || 1}</td>
-      </tr>
-    `,
-          )
+          .map((item: any) => {
+            let displayName = item.name || "Product";
+
+            // 🛡️ SAFETY FILTER: If the name is ridiculously long, it's accidentally the description!
+            // Let's fall back to a cleaner name from the variant or short name if we have it.
+            if (displayName.length > 50) {
+              if (item.productName) displayName = item.productName;
+              else if (typeof item.variant === "string")
+                displayName = item.variant.split(" - ")[0] || item.variant;
+              else if (item.size)
+                displayName = item.size.split(" - ")[0]; // Try to extract from size
+              else displayName = "Peptide"; // Final fallback
+            }
+
+            // Get a clean size label
+            let sizeLabel = item.size || "";
+            if (!sizeLabel && typeof item.variant === "string")
+              sizeLabel = item.variant;
+            if (!sizeLabel && item.variant?.size_label)
+              sizeLabel = item.variant.size_label;
+
+            return `
+              <tr style="border-bottom: 1px solid #f1f5f9;">
+                <td style="padding: 10px 0; color: #334155;">
+                  <strong>${displayName}</strong>
+                  ${sizeLabel && sizeLabel !== displayName ? `<br><span style="color: #64748b; font-size: 13px;">${sizeLabel}</span>` : ""}
+                </td>
+                <td style="padding: 10px 0; text-align: right; font-weight: 600;">x${item.quantity || 1}</td>
+              </tr>
+            `;
+          })
           .join("")
       : "";
 

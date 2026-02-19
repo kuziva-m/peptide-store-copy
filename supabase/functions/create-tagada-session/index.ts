@@ -3,8 +3,7 @@ import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 
 const STORE_ID = "store_913b2c5a8ee5";
-const TAGADA_API_URL =
-  "https://app.tagadapay.com/api/public/v1/checkout/sessions";
+const TAGADA_BASE_URL = "https://app.tagadapay.com";
 const SITE_URL = "https://melbournepeptides.com.au";
 
 const corsHeaders = {
@@ -13,7 +12,6 @@ const corsHeaders = {
     "authorization, x-client-info, apikey, content-type",
 };
 
-// --- TYPESCRIPT INTERFACES TO FIX LINTER ERRORS ---
 interface CartItem {
   id?: string;
   variantId?: string;
@@ -24,25 +22,6 @@ interface VariantRecord {
   id: string;
   tagada_id: string;
 }
-
-interface TagadaSessionPayload {
-  storeId: string;
-  currency: string;
-  amount: number;
-  referenceId: string;
-  cartToken: string;
-  items: Array<{ variantId: string; quantity: number }>;
-  successUrl: string;
-  cancelUrl: string;
-  metadata: { ref: string };
-  customer?: {
-    email: string;
-    firstName: string;
-    lastName: string;
-    phone: string;
-  };
-}
-// ---------------------------------------------------
 
 serve(async (req: Request) => {
   if (req.method === "OPTIONS")
@@ -68,6 +47,8 @@ serve(async (req: Request) => {
     }
 
     // 1. Create Order in Database
+    const cleanTotal = parseFloat(totals.total.toFixed(2));
+
     const { data: order, error: orderError } = await supabaseClient
       .from("orders")
       .insert({
@@ -84,9 +65,10 @@ serve(async (req: Request) => {
             }
           : null,
         status: "pending_payment",
-        total_amount: totals.total,
+        total_amount: cleanTotal,
         shipping_cost: totals.shipping || 0,
         shipping_method: totals.shippingMethod || "standard",
+        discount_code: totals.discountUsed || null,
         items: cart,
         created_at: new Date().toISOString(),
       })
@@ -101,58 +83,32 @@ serve(async (req: Request) => {
       quantity: item.quantity,
     }));
 
-    const TAGADA_SECRET = Deno.env.get("TAGADA_SECRET");
-    const cleanTotal = parseFloat(totals.total.toFixed(2));
+    // 2. Build Tagada checkout URL
+    const params = new URLSearchParams();
+    params.set("storeId", STORE_ID);
+    params.set("currency", "AUD");
 
-    // Fix: Explicitly declare the type here so TypeScript knows .customer is allowed
-    const sessionPayload: TagadaSessionPayload = {
-      storeId: STORE_ID,
-      currency: "AUD",
-      amount: Math.round(cleanTotal * 100),
-      referenceId: order.id,
-      cartToken: order.id, // Fallback injection
-      items: items,
-      successUrl: `${SITE_URL}/success?order_id=${order.id}`,
-      cancelUrl: `${SITE_URL}/shop`,
-      metadata: { ref: order.id },
-    };
+    // Pass Supabase order ID so webhook can match it
+    params.set("cartToken", order.id);
+    params.set("ref", order.id);
 
-    if (customer?.email) {
-      const parts = (customer.name || "Customer").trim().split(" ");
-      sessionPayload.customer = {
-        email: customer.email,
-        firstName: parts[0],
-        lastName: parts.slice(1).join(" ") || "",
-        phone: customer.phone || "",
-      };
+    // ✅ returnUrl is the correct param per Tagada docs
+    params.set("returnUrl", `${SITE_URL}/success?order_id=${order.id}`);
+
+    // 👤 Customer Details (pre-fill)
+    if (customer?.email) params.set("customerEmail", customer.email);
+    if (customer?.phone) params.set("customerPhone", customer.phone);
+    if (customer?.name) {
+      const parts = customer.name.trim().split(" ");
+      params.set("customerFirstName", parts[0] || "Customer");
+      params.set("customerLastName", parts.slice(1).join(" ") || "Customer");
     }
 
-    const response = await fetch(TAGADA_API_URL, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${TAGADA_SECRET}`,
-      },
-      body: JSON.stringify(sessionPayload),
-    });
+    // 🛒 Cart Items
+    params.set("items", JSON.stringify(items));
 
-    const sessionData = await response.json();
-    if (!response.ok)
-      throw new Error(sessionData.message || "Tagada API Error");
-
-    // 2. IMPORTANT FIX: Save Tagada's ID back to our database instantly!
-    const tagadaId =
-      sessionData.orderId || sessionData.paymentId || sessionData.id;
-    if (tagadaId) {
-      await supabaseClient
-        .from("orders")
-        .update({ stripe_session_id: tagadaId })
-        .eq("id", order.id);
-      console.log(`🔗 Linked DB Order ${order.id} -> Tagada ID ${tagadaId}`);
-    }
-
-    const checkoutUrl =
-      sessionData.url || sessionData.checkoutUrl || sessionData.paymentUrl;
+    const checkoutUrl = `${TAGADA_BASE_URL}/api/public/v1/checkout/init?${params.toString()}`;
+    console.log("✅ Checkout URL Generated:", checkoutUrl);
 
     return new Response(JSON.stringify({ url: checkoutUrl }), {
       headers: { ...corsHeaders, "Content-Type": "application/json" },
