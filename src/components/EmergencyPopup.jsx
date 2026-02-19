@@ -1,5 +1,5 @@
 import { useState, useEffect } from "react";
-import { X, AlertTriangle } from "lucide-react";
+import { X, AlertTriangle, Mail } from "lucide-react";
 
 export default function EmergencyPopup() {
   const [isOpen, setIsOpen] = useState(false);
@@ -78,39 +78,45 @@ export default function EmergencyPopup() {
         <p
           style={{ color: "#475569", lineHeight: "1.6", marginBottom: "20px" }}
         >
-          We are currently experiencing issues with our payment processor. This
-          matter should be resolved within the next 24 hours.
+          We’re currently going through technical difficulties with our payment
+          processor.
         </p>
 
         <div
           style={{
             backgroundColor: "#f8fafc",
-            padding: "15px",
+            padding: "20px",
             borderRadius: "8px",
             border: "1px solid #e2e8f0",
             marginBottom: "20px",
           }}
         >
           <p
-            style={{ fontWeight: "600", color: "#0f172a", marginBottom: "5px" }}
+            style={{
+              fontWeight: "600",
+              color: "#0f172a",
+              marginBottom: "10px",
+              fontSize: "1.1rem",
+            }}
           >
-            How to place an order now:
+            Please email us to place an order:
           </p>
-          <p style={{ fontSize: "0.9rem", color: "#334155" }}>
-            Please proceed to checkout as normal. You will be able to submit
-            your order manually and receive bank transfer details via email.
-          </p>
-          <p
-            style={{ marginTop: "10px", fontSize: "0.9rem", color: "#334155" }}
+          <a
+            href="mailto:info@melbournepeptides.com.au"
+            style={{
+              color: "white",
+              backgroundColor: "#0f172a",
+              fontWeight: "bold",
+              display: "inline-flex",
+              alignItems: "center",
+              gap: "8px",
+              padding: "10px 20px",
+              borderRadius: "8px",
+              textDecoration: "none",
+            }}
           >
-            Or email us at: <br />
-            <a
-              href="mailto:info@melbournepeptides.com.au"
-              style={{ color: "#3b82f6", fontWeight: "bold" }}
-            >
-              info@melbournepeptides.com.au
-            </a>
-          </p>
+            <Mail size={18} /> info@melbournepeptides.com.au
+          </a>
         </div>
 
         <button
@@ -118,8 +124,8 @@ export default function EmergencyPopup() {
           style={{
             width: "100%",
             padding: "12px",
-            backgroundColor: "#0f172a",
-            color: "white",
+            backgroundColor: "#e2e8f0",
+            color: "#475569",
             border: "none",
             borderRadius: "8px",
             fontWeight: "bold",
