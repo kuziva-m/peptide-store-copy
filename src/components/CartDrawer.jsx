@@ -1,5 +1,5 @@
 import { useEffect } from "react";
-import { X, Minus, Plus, ShoppingBag, Mail, Trash2 } from "lucide-react";
+import { X, Minus, Plus, ShoppingBag, ArrowRight, Trash2 } from "lucide-react";
 import { useCart } from "../lib/CartContext";
 import { useNavigate } from "react-router-dom";
 import "./CartDrawer.css";
@@ -15,7 +15,6 @@ export default function CartDrawer() {
   } = useCart();
   const navigate = useNavigate();
 
-  // Helper
   const getVariantLabel = (v) => {
     if (!v) return "";
     if (typeof v === "string") return v;
@@ -34,26 +33,9 @@ export default function CartDrawer() {
     };
   }, [isCartOpen]);
 
-  // --- CHANGED: Dynamically build the email body with cart items ---
-  const handleEmailOrderClick = () => {
-    const subject = encodeURIComponent("New Order Request");
-
-    // Build a text list of all items in the cart
-    let cartDetails = "";
-    cart.forEach((item) => {
-      const variantText = getVariantLabel(item.variant);
-      const itemTotal = (item.price * item.quantity).toFixed(2);
-      cartDetails += `- ${item.quantity}x ${item.name} ${variantText ? `(${variantText})` : ""} = $${itemTotal}\n`;
-    });
-
-    // Add the grand total
-    cartDetails += `\nOrder Total: $${cartTotal.toFixed(2)}`;
-
-    // Create the final email body
-    const rawBody = `Hi Melbourne Peptides team,\n\nI would like to place an order for the following items:\n\n${cartDetails}\n\nPlease let me know how to proceed with payment and shipping.\n\nThank you!`;
-
-    const body = encodeURIComponent(rawBody);
-    window.location.href = `mailto:info@melbournepeptides.com.au?subject=${subject}&body=${body}`;
+  const handleCheckoutClick = () => {
+    toggleCart();
+    navigate("/checkout");
   };
 
   if (!isCartOpen) return null;
@@ -155,37 +137,10 @@ export default function CartDrawer() {
                 <span>Subtotal</span>
                 <span className="big-price">${cartTotal.toFixed(2)}</span>
               </div>
-              <p
-                className="shipping-note"
-                style={{ color: "#ef4444", fontWeight: "600" }}
-              >
-                Online checkout is temporarily disabled.
-              </p>
+              <p className="shipping-note">Shipping calculated at checkout.</p>
 
-              <button
-                disabled
-                className="checkout-btn"
-                style={{
-                  backgroundColor: "#94a3b8",
-                  cursor: "not-allowed",
-                  opacity: 0.7,
-                }}
-              >
-                Checkout Closed
-              </button>
-
-              <button
-                onClick={handleEmailOrderClick}
-                className="checkout-btn"
-                style={{
-                  backgroundColor: "#d97706",
-                  display: "flex",
-                  justifyContent: "center",
-                  gap: "8px",
-                  marginTop: "10px",
-                }}
-              >
-                <Mail size={18} /> Email Us to Order
+              <button onClick={handleCheckoutClick} className="checkout-btn">
+                Checkout <ArrowRight size={18} />
               </button>
             </div>
           </>
