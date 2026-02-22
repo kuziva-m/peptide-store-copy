@@ -14,11 +14,10 @@ import {
 import "../components/CartDrawer.css";
 
 export default function Checkout() {
-  const { cart, cartTotal, clearCart } = useCart();
+  const { cart, cartTotal } = useCart(); // Removed clearCart here to prevent the redirect bug!
   const navigate = useNavigate();
 
   // --- PRE-GENERATE ORDER ID ---
-  // Generate the UUID now so we can show it as the bank reference before submission
   const [orderId] = useState(() => crypto.randomUUID());
   const shortRef = orderId.slice(0, 8).toUpperCase();
 
@@ -130,7 +129,7 @@ export default function Checkout() {
 
       // 2. Insert Order directly into Supabase Database using our pre-generated ID
       const orderPayload = {
-        id: orderId, // We assign the pre-generated ID here
+        id: orderId,
         customer_name: formData.name,
         customer_email: formData.email,
         total_amount: estimatedTotal,
@@ -142,14 +141,65 @@ export default function Checkout() {
         status: "pending",
       };
 
-      const { data: orderData, error: orderError } = await supabase
+      // NO .select() or .single() here! This allows guest inserts without triggering RLS read errors.
+      const { error: orderError } = await supabase
         .from("orders")
-        .insert(orderPayload)
-        .select()
-        .single();
+        .insert(orderPayload);
 
       if (orderError) throw orderError;
-      navigate(`/success?order_id=${orderData.id}`);
+
+      // 3. SEND EMAIL NOTIFICATIONS (To Customer & Admin)
+      try {
+        // Format items specifically for the email template
+        const emailItems = cart.map((item) => ({
+          name: item.name,
+          quantity: item.quantity,
+          size: getVariantLabel(item.variant),
+        }));
+
+        // A. Email to Customer
+        await supabase.functions.invoke("send-email", {
+          body: {
+            email: formData.email,
+            name: formData.name,
+            orderId: orderId,
+            status: "custom",
+            message:
+              "Thank you for your order! We have received your payment proof. Your order is currently under review and we will notify you as soon as your payment is confirmed and your package is ready to ship.",
+            items: emailItems,
+            address: formData,
+          },
+        });
+
+        // B. Email to Store Admin
+        const adminHtml = `
+          <div style="text-align: left;">
+            <p><strong>Order ID:</strong> #${shortRef}</p>
+            <p><strong>Customer:</strong> ${formData.name} (<a href="mailto:${formData.email}">${formData.email}</a>)</p>
+            <p><strong>Order Total:</strong> $${estimatedTotal.toFixed(2)}</p>
+            <p><strong>Shipping Speed:</strong> ${shippingMethod === "express" ? "Express" : "Standard"}</p>
+            <br/>
+            <p><strong>Payment Screenshot:</strong></p>
+            <a href="${receiptUrl}" target="_blank" style="display: inline-block; background: #16a34a; color: white; padding: 10px 16px; text-decoration: none; border-radius: 6px; font-weight: bold;">View Receipt</a>
+            <br/><br/>
+            <p>Log in to your admin panel to review and approve this order.</p>
+          </div>
+        `;
+
+        await supabase.functions.invoke("send-email", {
+          body: {
+            to: "info@melbournepeptides.com.au", // Change if you want it sent somewhere else!
+            subject: `🚨 New Order Received! - #${shortRef}`,
+            html: adminHtml,
+          },
+        });
+      } catch (emailErr) {
+        console.error("Failed to send notification emails:", emailErr);
+        // We catch this silently so the customer still gets sent to the success page even if Resend glitches!
+      }
+
+      // 4. Redirect to Success (Using the pre-generated orderId!)
+      navigate(`/success?order_id=${orderId}`);
     } catch (err) {
       console.error("Checkout Error:", err);
       setError(err.message || "Failed to submit order. Please try again.");
@@ -456,6 +506,7 @@ export default function Checkout() {
                   boxShadow: "0 4px 6px -1px rgba(0, 0, 0, 0.05)",
                 }}
               >
+                {/* UPDATED: Copyable Account Name */}
                 <div
                   style={{
                     display: "flex",
@@ -469,10 +520,32 @@ export default function Checkout() {
                   <span style={{ fontSize: "13px", color: "#64748b" }}>
                     Account Name
                   </span>
-                  <span style={{ fontWeight: "600", color: "#0f172a" }}>
-                    Melbourne Peptides
-                  </span>
+                  <div
+                    style={{
+                      display: "flex",
+                      alignItems: "center",
+                      gap: "10px",
+                    }}
+                  >
+                    <span
+                      style={{
+                        fontWeight: "600",
+                        color: "#0f172a",
+                        fontSize: "15px",
+                      }}
+                    >
+                      Melbourne Peptides
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => handleCopy("Melbourne Peptides", "name")}
+                      style={copyBtnStyle}
+                    >
+                      {copied === "name" ? "Copied!" : <Copy size={14} />}
+                    </button>
+                  </div>
                 </div>
+
                 <div
                   style={{
                     display: "flex",

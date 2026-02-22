@@ -1,5 +1,8 @@
 {
   "projects": {
-    "default": "peptide-store"
-  }
+    "default": "peptide-store",
+    "staging": "peptide-store"
+  },
+  "targets": {},
+  "etags": {}
 }
