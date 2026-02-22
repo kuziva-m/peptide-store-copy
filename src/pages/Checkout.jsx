@@ -1,17 +1,67 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { useCart } from "../lib/CartContext";
 import { useNavigate } from "react-router-dom";
 import { supabase } from "../lib/supabase";
-import { ArrowLeft, Lock, Loader, Truck } from "lucide-react";
+import {
+  ArrowLeft,
+  Loader,
+  Truck,
+  Copy,
+  Upload,
+  CheckCircle,
+  Landmark,
+} from "lucide-react";
 import "../components/CartDrawer.css";
 
 export default function Checkout() {
-  const { cart, cartTotal } = useCart();
+  const { cart, cartTotal, clearCart } = useCart();
   const navigate = useNavigate();
 
-  const [email, setEmail] = useState("");
+  // --- PRE-GENERATE ORDER ID ---
+  // Generate the UUID now so we can show it as the bank reference before submission
+  const [orderId] = useState(() => crypto.randomUUID());
+  const shortRef = orderId.slice(0, 8).toUpperCase();
+
+  // --- STATE ---
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState(null);
+  const [copied, setCopied] = useState("");
+
+  // File Upload State
+  const [receiptFile, setReceiptFile] = useState(null);
+  const [previewUrl, setPreviewUrl] = useState(null);
+
+  const [formData, setFormData] = useState({
+    name: "",
+    email: "",
+    phone: "",
+    line1: "",
+    city: "",
+    state: "",
+    postcode: "",
+  });
+
+  const [shippingMethod, setShippingMethod] = useState("standard");
+
+  // Redirect if cart is empty
+  useEffect(() => {
+    if (!cart || cart.length === 0) {
+      navigate("/shop");
+    }
+  }, [cart, navigate]);
+
+  const handleChange = (e) => {
+    setFormData({ ...formData, [e.target.name]: e.target.value });
+  };
+
+  const handleFileChange = (e) => {
+    const file = e.target.files[0];
+    if (file) {
+      setReceiptFile(file);
+      setPreviewUrl(URL.createObjectURL(file));
+      setError(null);
+    }
+  };
 
   const getVariantLabel = (v) => {
     if (!v) return "";
@@ -20,83 +70,99 @@ export default function Checkout() {
     return String(v);
   };
 
-  let shippingMessage = "";
-  let shippingColor = "#d97706";
-  let defaultShippingCost = 0;
-  let shippingLabel = "";
+  const handleCopy = (text, type) => {
+    navigator.clipboard.writeText(text);
+    setCopied(type);
+    setTimeout(() => setCopied(""), 2000);
+  };
 
-  if (cartTotal < 150) {
-    shippingMessage = `Add $${(150 - cartTotal).toFixed(2)} more to unlock Free Shipping.`;
-    defaultShippingCost = 9.99;
-    shippingLabel = "$9.99";
-  } else if (cartTotal >= 150 && cartTotal < 250) {
-    shippingMessage = `Free Shipping!`;
-    shippingColor = "#16a34a";
-    defaultShippingCost = 0;
-    shippingLabel = "Free";
+  // --- SHIPPING CALCULATIONS ---
+  const isStandardFree = cartTotal >= 150;
+  const isExpressFree = cartTotal >= 250;
+
+  let shippingCost = 0;
+  let shippingLabel = "Free";
+
+  if (shippingMethod === "express") {
+    shippingCost = isExpressFree ? 0 : 14.99;
+    shippingLabel = isExpressFree ? "Free" : "$14.99";
   } else {
-    shippingMessage = `Free Shipping`;
-    shippingColor = "#16a34a";
-    defaultShippingCost = 0;
-    shippingLabel = "Free";
+    shippingCost = isStandardFree ? 0 : 9.99;
+    shippingLabel = isStandardFree ? "Free" : "$9.99";
   }
 
-  const estimatedTotal = cartTotal + defaultShippingCost;
+  const estimatedTotal = cartTotal + shippingCost;
 
-  const handlePaymentSubmit = async (e) => {
+  // --- FINAL SUBMIT ---
+  const submitOrder = async (e) => {
     e.preventDefault();
+
+    if (!receiptFile) {
+      setError(
+        "Please upload a screenshot of your payment receipt to complete your order.",
+      );
+      window.scrollTo({ top: 0, behavior: "smooth" });
+      return;
+    }
+
     setIsLoading(true);
     setError(null);
 
     try {
-      const payload = {
-        cart,
-        totals: {
-          total: cartTotal,
-          shipping: 0,
-          shippingMethod: "Calculated by Tagada",
-          discountUsed: null,
-        },
-        customer: { email },
+      // 1. Upload the Receipt Image to Supabase Storage
+      const fileExt = receiptFile.name.split(".").pop();
+      const fileName = `${Date.now()}_${Math.random().toString(36).substring(2, 9)}.${fileExt}`;
+
+      const { error: uploadError } = await supabase.storage
+        .from("payment-proofs")
+        .upload(fileName, receiptFile);
+
+      if (uploadError)
+        throw new Error(
+          "Failed to upload receipt. Please ensure the file is valid and try again.",
+        );
+
+      const { data: publicUrlData } = supabase.storage
+        .from("payment-proofs")
+        .getPublicUrl(fileName);
+
+      const receiptUrl = publicUrlData.publicUrl;
+
+      // 2. Insert Order directly into Supabase Database using our pre-generated ID
+      const orderPayload = {
+        id: orderId, // We assign the pre-generated ID here
+        customer_name: formData.name,
+        customer_email: formData.email,
+        total_amount: estimatedTotal,
+        shipping_cost: shippingCost,
+        shipping_method: shippingMethod === "express" ? "Express" : "Standard",
+        shipping_address: formData,
+        items: cart,
+        receipt_url: receiptUrl,
+        status: "pending",
       };
 
-      const { data, error: functionError } = await supabase.functions.invoke(
-        "create-tagada-session",
-        { body: payload },
-      );
+      const { data: orderData, error: orderError } = await supabase
+        .from("orders")
+        .insert(orderPayload)
+        .select()
+        .single();
 
-      if (functionError) throw new Error(functionError.message);
-
-      if (data?.url) {
-        window.location.href = data.url;
-      } else {
-        throw new Error("Could not retrieve payment link.");
-      }
+      if (orderError) throw orderError;
+      navigate(`/success?order_id=${orderData.id}`);
     } catch (err) {
       console.error("Checkout Error:", err);
-      setError("Failed to start secure checkout. Please try again.");
+      setError(err.message || "Failed to submit order. Please try again.");
+      window.scrollTo({ top: 0, behavior: "smooth" });
+    } finally {
       setIsLoading(false);
     }
   };
 
-  if (!cart || cart.length === 0) {
-    return (
-      <div style={{ textAlign: "center", padding: "100px 20px" }}>
-        <h2>Your cart is empty</h2>
-        <button
-          onClick={() => navigate("/shop")}
-          className="checkout-btn"
-          style={{ maxWidth: "200px", margin: "20px auto" }}
-        >
-          Go to Shop
-        </button>
-      </div>
-    );
-  }
+  if (!cart || cart.length === 0) return null;
 
   return (
     <>
-      {/* Inject responsive styles */}
       <style>{`
         .checkout-wrapper {
           max-width: 1000px;
@@ -106,85 +172,25 @@ export default function Checkout() {
           grid-template-columns: 1fr 1fr;
           gap: 40px;
         }
-
         @media (max-width: 768px) {
           .checkout-wrapper {
             grid-template-columns: 1fr;
             margin: 20px auto;
             gap: 24px;
           }
-
-          .checkout-summary {
-            order: -1;
-          }
-
-          .checkout-summary-inner {
-            padding: 20px !important;
-          }
-
-          .checkout-shipping-grid {
-            flex-direction: column !important;
-            gap: 8px !important;
-          }
-
-          .checkout-shipping-row {
-            flex-direction: column !important;
-            align-items: flex-start !important;
-            gap: 2px !important;
-          }
-        }
-
-        @media (max-width: 480px) {
-          .checkout-wrapper {
-            padding: 0 12px;
-            margin: 12px auto;
-          }
-
-          .checkout-title {
-            font-size: 20px !important;
-          }
-
-          .checkout-submit-btn {
-            font-size: 15px !important;
-            padding: 14px !important;
-          }
-
-          .cart-item-row {
-            gap: 8px !important;
-          }
-
-          .cart-item-img {
-            width: 42px !important;
-            height: 42px !important;
-          }
+          .checkout-summary { order: -1; }
         }
       `}</style>
 
       <div className="checkout-wrapper">
-        {/* LEFT SIDE */}
+        {/* LEFT SIDE: COMBINED FORM & PAYMENT INFO */}
         <div>
-          <button
-            onClick={() => navigate("/shop")}
-            style={{
-              display: "flex",
-              alignItems: "center",
-              gap: "8px",
-              background: "none",
-              border: "none",
-              color: "#64748b",
-              cursor: "pointer",
-              marginBottom: "20px",
-              padding: 0,
-            }}
-          >
+          <button onClick={() => navigate("/shop")} style={backBtnStyle}>
             <ArrowLeft size={16} /> Back to Shop
           </button>
 
-          <h2
-            className="checkout-title"
-            style={{ marginBottom: "20px", fontSize: "24px" }}
-          >
-            Express Checkout
+          <h2 style={{ marginBottom: "15px", fontSize: "24px" }}>
+            Secure Checkout
           </h2>
           <p
             style={{
@@ -193,9 +199,8 @@ export default function Checkout() {
               lineHeight: "1.5",
             }}
           >
-            Enter your email below to proceed. You will enter your secure
-            shipping details, choose your delivery speed, and apply any promo
-            codes on the next page.
+            Please fill out your shipping details, complete the bank transfer,
+            and upload your payment proof to submit your order.
           </p>
 
           {error && (
@@ -213,22 +218,113 @@ export default function Checkout() {
           )}
 
           <form
-            onSubmit={handlePaymentSubmit}
-            style={{ display: "flex", flexDirection: "column", gap: "16px" }}
+            onSubmit={submitOrder}
+            style={{ display: "flex", flexDirection: "column", gap: "24px" }}
           >
-            <input
-              required
-              type="email"
-              placeholder="Email Address"
-              value={email}
-              onChange={(e) => setEmail(e.target.value)}
-              style={{ ...inputStyle, padding: "16px", fontSize: "16px" }}
-            />
+            {/* SECTION 1: SHIPPING */}
+            <div>
+              <h3
+                style={{
+                  fontSize: "18px",
+                  marginBottom: "12px",
+                  color: "#0f172a",
+                }}
+              >
+                1. Shipping Details
+              </h3>
+              <div
+                style={{
+                  display: "flex",
+                  flexDirection: "column",
+                  gap: "16px",
+                }}
+              >
+                <div
+                  style={{
+                    display: "grid",
+                    gridTemplateColumns: "1fr 1fr",
+                    gap: "16px",
+                  }}
+                >
+                  <input
+                    required
+                    type="text"
+                    name="name"
+                    placeholder="Full Name"
+                    value={formData.name}
+                    onChange={handleChange}
+                    style={inputStyle}
+                  />
+                  <input
+                    required
+                    type="email"
+                    name="email"
+                    placeholder="Email Address"
+                    value={formData.email}
+                    onChange={handleChange}
+                    style={inputStyle}
+                  />
+                </div>
+                <input
+                  required
+                  type="tel"
+                  name="phone"
+                  placeholder="Phone Number"
+                  value={formData.phone}
+                  onChange={handleChange}
+                  style={inputStyle}
+                />
+                <input
+                  required
+                  type="text"
+                  name="line1"
+                  placeholder="Street Address"
+                  value={formData.line1}
+                  onChange={handleChange}
+                  style={inputStyle}
+                />
 
-            {/* SHIPPING PANEL */}
+                <div
+                  style={{
+                    display: "grid",
+                    gridTemplateColumns: "1fr 1fr 1fr",
+                    gap: "16px",
+                  }}
+                >
+                  <input
+                    required
+                    type="text"
+                    name="city"
+                    placeholder="City / Suburb"
+                    value={formData.city}
+                    onChange={handleChange}
+                    style={inputStyle}
+                  />
+                  <input
+                    required
+                    type="text"
+                    name="state"
+                    placeholder="State (e.g. VIC)"
+                    value={formData.state}
+                    onChange={handleChange}
+                    style={inputStyle}
+                  />
+                  <input
+                    required
+                    type="text"
+                    name="postcode"
+                    placeholder="Postcode"
+                    value={formData.postcode}
+                    onChange={handleChange}
+                    style={inputStyle}
+                  />
+                </div>
+              </div>
+            </div>
+
+            {/* SECTION 2: SHIPPING SPEED */}
             <div
               style={{
-                marginTop: "10px",
                 padding: "20px",
                 background: "#f8fafc",
                 borderRadius: "8px",
@@ -245,102 +341,383 @@ export default function Checkout() {
                   color: "#0f172a",
                 }}
               >
-                <Truck size={18} color="#0f172a" /> Shipping Rates
+                <Truck size={18} color="#0f172a" /> Select Shipping Speed
               </h3>
-
-              <div
-                className="checkout-shipping-grid"
-                style={{
-                  fontSize: "14px",
-                  color: "#475569",
-                  display: "flex",
-                  flexDirection: "column",
-                  gap: "12px",
-                }}
-              >
+              <div style={{ display: "flex", gap: "10px" }}>
                 <div
-                  className="checkout-shipping-row"
+                  onClick={() => setShippingMethod("standard")}
                   style={{
-                    display: "flex",
-                    justifyContent: "space-between",
-                    alignItems: "center",
+                    flex: 1,
+                    padding: "12px",
+                    borderRadius: "8px",
+                    cursor: "pointer",
+                    border:
+                      shippingMethod === "standard"
+                        ? "2px solid #3b82f6"
+                        : "1px solid #cbd5e1",
+                    background:
+                      shippingMethod === "standard" ? "#eff6ff" : "white",
                   }}
                 >
-                  <span>Standard Shipping</span>
-                  <span style={{ fontWeight: "600", color: "#0f172a" }}>
-                    $9.99{" "}
-                    <span
-                      style={{
-                        color: "#64748b",
-                        fontWeight: "normal",
-                        fontSize: "12px",
-                      }}
-                    >
-                      (Free over $150)
-                    </span>
+                  <span
+                    style={{
+                      display: "block",
+                      fontWeight: "600",
+                      color: "#0f172a",
+                      marginBottom: "4px",
+                    }}
+                  >
+                    Standard
+                  </span>
+                  <span
+                    style={{
+                      fontSize: "13px",
+                      color: isStandardFree ? "#16a34a" : "#64748b",
+                      fontWeight: isStandardFree ? "bold" : "normal",
+                    }}
+                  >
+                    {isStandardFree ? "Free (Orders over $150)" : "$9.99"}
                   </span>
                 </div>
                 <div
-                  className="checkout-shipping-row"
+                  onClick={() => setShippingMethod("express")}
                   style={{
-                    display: "flex",
-                    justifyContent: "space-between",
-                    alignItems: "center",
+                    flex: 1,
+                    padding: "12px",
+                    borderRadius: "8px",
+                    cursor: "pointer",
+                    border:
+                      shippingMethod === "express"
+                        ? "2px solid #3b82f6"
+                        : "1px solid #cbd5e1",
+                    background:
+                      shippingMethod === "express" ? "#eff6ff" : "white",
                   }}
                 >
-                  <span>Express Shipping</span>
-                  <span style={{ fontWeight: "600", color: "#0f172a" }}>
-                    $14.99{" "}
-                    <span
-                      style={{
-                        color: "#64748b",
-                        fontWeight: "normal",
-                        fontSize: "12px",
-                      }}
-                    >
-                      (Free over $250)
-                    </span>
+                  <span
+                    style={{
+                      display: "block",
+                      fontWeight: "600",
+                      color: "#0f172a",
+                      marginBottom: "4px",
+                    }}
+                  >
+                    Express
+                  </span>
+                  <span
+                    style={{
+                      fontSize: "13px",
+                      color: isExpressFree ? "#16a34a" : "#64748b",
+                      fontWeight: isExpressFree ? "bold" : "normal",
+                    }}
+                  >
+                    {isExpressFree ? "Free (Orders over $250)" : "$14.99"}
                   </span>
                 </div>
               </div>
+            </div>
+
+            <hr style={{ border: "none", borderTop: "1px solid #e2e8f0" }} />
+
+            {/* SECTION 3: BANK DETAILS */}
+            <div>
+              <h3
+                style={{
+                  fontSize: "18px",
+                  marginBottom: "12px",
+                  color: "#0f172a",
+                  display: "flex",
+                  alignItems: "center",
+                  gap: "8px",
+                }}
+              >
+                <Landmark size={20} /> 2. Complete Payment
+              </h3>
+              <p
+                style={{
+                  color: "#475569",
+                  marginBottom: "16px",
+                  fontSize: "14px",
+                }}
+              >
+                Transfer exactly{" "}
+                <strong style={{ color: "#0f172a" }}>
+                  ${estimatedTotal.toFixed(2)}
+                </strong>{" "}
+                to the account below.
+              </p>
 
               <div
                 style={{
-                  marginTop: "16px",
-                  paddingTop: "16px",
-                  borderTop: "1px solid #cbd5e1",
-                  fontSize: "14px",
-                  fontWeight: "600",
-                  color: shippingColor,
-                  textAlign: "center",
+                  background: "white",
+                  padding: "20px",
+                  borderRadius: "8px",
+                  border: "1px solid #cbd5e1",
+                  boxShadow: "0 4px 6px -1px rgba(0, 0, 0, 0.05)",
                 }}
               >
-                {shippingMessage}
+                <div
+                  style={{
+                    display: "flex",
+                    justifyContent: "space-between",
+                    alignItems: "center",
+                    borderBottom: "1px solid #e2e8f0",
+                    paddingBottom: "12px",
+                    marginBottom: "12px",
+                  }}
+                >
+                  <span style={{ fontSize: "13px", color: "#64748b" }}>
+                    Account Name
+                  </span>
+                  <span style={{ fontWeight: "600", color: "#0f172a" }}>
+                    Melbourne Peptides
+                  </span>
+                </div>
+                <div
+                  style={{
+                    display: "flex",
+                    justifyContent: "space-between",
+                    alignItems: "center",
+                    borderBottom: "1px solid #e2e8f0",
+                    paddingBottom: "12px",
+                    marginBottom: "12px",
+                  }}
+                >
+                  <span style={{ fontSize: "13px", color: "#64748b" }}>
+                    BSB
+                  </span>
+                  <div
+                    style={{
+                      display: "flex",
+                      alignItems: "center",
+                      gap: "10px",
+                    }}
+                  >
+                    <span
+                      style={{
+                        fontWeight: "600",
+                        color: "#0f172a",
+                        fontSize: "16px",
+                      }}
+                    >
+                      013 226
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => handleCopy("013226", "bsb")}
+                      style={copyBtnStyle}
+                    >
+                      {copied === "bsb" ? "Copied!" : <Copy size={14} />}
+                    </button>
+                  </div>
+                </div>
+                <div
+                  style={{
+                    display: "flex",
+                    justifyContent: "space-between",
+                    alignItems: "center",
+                    borderBottom: "1px solid #e2e8f0",
+                    paddingBottom: "12px",
+                    marginBottom: "12px",
+                  }}
+                >
+                  <span style={{ fontSize: "13px", color: "#64748b" }}>
+                    Account Number
+                  </span>
+                  <div
+                    style={{
+                      display: "flex",
+                      alignItems: "center",
+                      gap: "10px",
+                    }}
+                  >
+                    <span
+                      style={{
+                        fontWeight: "600",
+                        color: "#0f172a",
+                        fontSize: "16px",
+                      }}
+                    >
+                      806 890 436
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => handleCopy("806890436", "acc")}
+                      style={copyBtnStyle}
+                    >
+                      {copied === "acc" ? "Copied!" : <Copy size={14} />}
+                    </button>
+                  </div>
+                </div>
+
+                {/* DYNAMIC REFERENCE NUMBER */}
+                <div
+                  style={{
+                    padding: "12px",
+                    background: "#eff6ff",
+                    borderRadius: "6px",
+                    fontSize: "14px",
+                    color: "#1e3a8a",
+                    border: "1px solid #bfdbfe",
+                    textAlign: "center",
+                    display: "flex",
+                    alignItems: "center",
+                    justifyContent: "space-between",
+                  }}
+                >
+                  <span>
+                    <strong>Reference:</strong> Please use{" "}
+                    <strong>#{shortRef}</strong>
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => handleCopy(shortRef, "ref")}
+                    style={{
+                      ...copyBtnStyle,
+                      background: "white",
+                      padding: "4px 8px",
+                    }}
+                  >
+                    {copied === "ref" ? "Copied!" : <Copy size={14} />}
+                  </button>
+                </div>
+              </div>
+            </div>
+
+            {/* SECTION 4: FILE UPLOAD */}
+            <div>
+              <h3
+                style={{
+                  fontSize: "18px",
+                  marginBottom: "12px",
+                  color: "#0f172a",
+                }}
+              >
+                3. Upload Proof
+              </h3>
+              <div
+                style={{
+                  border: previewUrl
+                    ? "2px solid #16a34a"
+                    : "2px dashed #cbd5e1",
+                  borderRadius: "12px",
+                  padding: "30px 20px",
+                  textAlign: "center",
+                  cursor: "pointer",
+                  position: "relative",
+                  backgroundColor: previewUrl ? "#f0fdf4" : "#f8fafc",
+                  transition: "all 0.2s",
+                }}
+              >
+                <input
+                  type="file"
+                  required
+                  accept="image/*"
+                  onChange={handleFileChange}
+                  style={{
+                    position: "absolute",
+                    top: 0,
+                    left: 0,
+                    width: "100%",
+                    height: "100%",
+                    opacity: 0,
+                    cursor: "pointer",
+                    zIndex: 10,
+                  }}
+                />
+                {previewUrl ? (
+                  <div
+                    style={{
+                      display: "flex",
+                      flexDirection: "column",
+                      alignItems: "center",
+                    }}
+                  >
+                    <CheckCircle
+                      size={32}
+                      color="#16a34a"
+                      style={{ marginBottom: "10px" }}
+                    />
+                    <p
+                      style={{
+                        margin: "0 0 10px 0",
+                        fontWeight: "600",
+                        color: "#16a34a",
+                      }}
+                    >
+                      Receipt Attached!
+                    </p>
+                    <img
+                      src={previewUrl}
+                      alt="Preview"
+                      style={{
+                        maxHeight: "120px",
+                        borderRadius: "8px",
+                        border: "1px solid #bbf7d0",
+                      }}
+                    />
+                    <p
+                      style={{
+                        margin: "10px 0 0 0",
+                        fontSize: "12px",
+                        color: "#64748b",
+                      }}
+                    >
+                      Click or drag to replace
+                    </p>
+                  </div>
+                ) : (
+                  <div>
+                    <Upload
+                      size={32}
+                      color="#64748b"
+                      style={{ margin: "0 auto 10px auto" }}
+                    />
+                    <p
+                      style={{
+                        margin: 0,
+                        color: "#0f172a",
+                        fontWeight: "600",
+                        fontSize: "16px",
+                      }}
+                    >
+                      Upload Payment Screenshot
+                    </p>
+                    <p
+                      style={{
+                        margin: "5px 0 0 0",
+                        color: "#64748b",
+                        fontSize: "13px",
+                      }}
+                    >
+                      We need this to verify and ship your order
+                    </p>
+                  </div>
+                )}
               </div>
             </div>
 
             <button
               type="submit"
-              disabled={isLoading}
-              className="checkout-btn checkout-submit-btn"
+              disabled={isLoading || !receiptFile}
+              className="checkout-btn"
               style={{
                 marginTop: "10px",
-                padding: "16px",
-                fontSize: "16px",
+                padding: "18px",
+                fontSize: "18px",
                 display: "flex",
                 justifyContent: "center",
                 alignItems: "center",
                 gap: "10px",
+                opacity: !receiptFile || isLoading ? 0.7 : 1,
               }}
             >
               {isLoading ? (
                 <>
-                  <Loader className="spin-anim" size={18} /> Secure Redirect...
+                  <Loader className="spin-anim" size={20} /> Processing...
                 </>
               ) : (
-                <>
-                  <Lock size={18} /> Proceed to Secure Payment
-                </>
+                "Submit Order"
               )}
             </button>
           </form>
@@ -349,17 +726,20 @@ export default function Checkout() {
         {/* RIGHT SIDE: ORDER SUMMARY */}
         <div className="checkout-summary">
           <div
-            className="checkout-summary-inner"
             style={{
               background: "#f8fafc",
               padding: "30px",
               borderRadius: "12px",
               height: "fit-content",
+              border: "1px solid #e2e8f0",
+              position: "sticky",
+              top: "20px",
             }}
           >
             <h3 style={{ marginBottom: "20px", fontSize: "18px" }}>
               Order Summary
             </h3>
+
             <div
               style={{
                 display: "flex",
@@ -373,7 +753,6 @@ export default function Checkout() {
                 return (
                   <div
                     key={i}
-                    className="cart-item-row"
                     style={{
                       display: "flex",
                       justifyContent: "space-between",
@@ -393,7 +772,6 @@ export default function Checkout() {
                       <img
                         src={item.image}
                         alt={item.name}
-                        className="cart-item-img"
                         style={{
                           width: "50px",
                           height: "50px",
@@ -469,12 +847,15 @@ export default function Checkout() {
                 color: "#64748b",
               }}
             >
-              <span>Shipping</span>
+              <span>
+                Shipping (
+                {shippingMethod === "express" ? "Express" : "Standard"})
+              </span>
               <span
                 style={{
                   fontSize: "14px",
-                  fontWeight: defaultShippingCost === 0 ? "600" : "500",
-                  color: defaultShippingCost === 0 ? "#16a34a" : "inherit",
+                  fontWeight: shippingCost === 0 ? "600" : "500",
+                  color: shippingCost === 0 ? "#16a34a" : "inherit",
                 }}
               >
                 {shippingLabel}
@@ -487,9 +868,10 @@ export default function Checkout() {
                 justifyContent: "space-between",
                 fontSize: "20px",
                 fontWeight: "bold",
+                color: "#0f172a",
               }}
             >
-              <span>Estimated Total</span>
+              <span>Total to Pay</span>
               <span>${estimatedTotal.toFixed(2)}</span>
             </div>
           </div>
@@ -500,11 +882,39 @@ export default function Checkout() {
 }
 
 const inputStyle = {
-  padding: "12px 16px",
+  padding: "14px 16px",
   borderRadius: "8px",
   border: "1px solid #cbd5e1",
   fontSize: "15px",
   outline: "none",
   width: "100%",
   boxSizing: "border-box",
+};
+
+const backBtnStyle = {
+  display: "flex",
+  alignItems: "center",
+  gap: "8px",
+  background: "none",
+  border: "none",
+  color: "#64748b",
+  cursor: "pointer",
+  marginBottom: "20px",
+  padding: 0,
+  fontWeight: "500",
+};
+
+const copyBtnStyle = {
+  background: "#f1f5f9",
+  border: "1px solid #cbd5e1",
+  color: "#334155",
+  fontSize: "12px",
+  cursor: "pointer",
+  display: "flex",
+  alignItems: "center",
+  gap: "4px",
+  fontWeight: "600",
+  padding: "6px 10px",
+  borderRadius: "6px",
+  transition: "all 0.2s",
 };

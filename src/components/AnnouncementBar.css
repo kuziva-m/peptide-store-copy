@@ -1,51 +1,60 @@
 .announcement-bar {
-  background-color: var(--medical-navy);
+  background-color: #0f172a;
   color: white;
-  height: 44px; /* Fixed height for stability */
+  height: 40px;
+  overflow: hidden; /* Cuts off the text outside the screen */
   display: flex;
   align-items: center;
-  justify-content: center;
-  overflow: hidden; /* Hide the text when it slides out */
-  position: relative;
+  font-family: inherit;
+  font-size: 14px;
   border-bottom: 1px solid rgba(255, 255, 255, 0.1);
-  font-family: var(--font-main);
-  font-size: 0.9rem;
+  position: relative;
+  width: 100%;
+}
+
+.marquee {
+  display: flex;
+  width: max-content; /* Let it be as wide as the text needs */
+  animation: marqueeScroll 25s linear infinite;
+}
+
+/* Pause animation when a user hovers over the bar (desktop friendly) */
+.announcement-bar:hover .marquee {
+  animation-play-state: paused;
+}
+
+.marquee-content {
+  display: flex;
+  white-space: nowrap; /* Forces text to stay on one line! */
+}
+
+.marquee-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0 40px; /* Space between each message */
+  font-weight: 500;
   letter-spacing: 0.02em;
 }
 
-.announcement-content {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: 10px;
-  height: 100%;
-  width: 100%;
-  position: absolute;
-  opacity: 0;
-  transform: translateY(20px); /* Start slightly below */
-  transition: opacity 0.5s ease, transform 0.5s ease;
-  pointer-events: none; /* Prevent clicking while fading */
+@keyframes marqueeScroll {
+  0% {
+    transform: translateX(0);
+  }
+  100% {
+    transform: translateX(
+      -50%
+    ); /* Moves exactly one full set to the left to loop seamlessly */
+  }
 }
 
-/* The "Active" slide */
-.announcement-content.active {
-  opacity: 1;
-  transform: translateY(0);
-  pointer-events: auto;
-}
-
-.announcement-highlight {
-  color: #fbbf24; /* Amber-400 for prices */
-  font-weight: 700;
-}
-
-.announcement-icon {
-  color: var(--clinical-teal); /* Teal for icons */
-  flex-shrink: 0;
-}
-
-@media (max-width: 600px) {
+/* Mobile Adjustments */
+@media (max-width: 768px) {
   .announcement-bar {
-    font-size: 0.8rem;
+    height: 36px;
+    font-size: 13px;
+  }
+  .marquee-item {
+    padding: 0 25px; /* Slightly less gap on mobile */
   }
 }

@@ -10,8 +10,8 @@ export default function OrderManager() {
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState("");
 
-  // Default to "paid" since manual checkouts are gone
-  const [statusFilter, setStatusFilter] = useState("paid");
+  // Default to "pending" so you immediately see new manual orders!
+  const [statusFilter, setStatusFilter] = useState("pending");
   const [notification, setNotification] = useState(null);
 
   const [modalConfig, setModalConfig] = useState({
@@ -142,7 +142,12 @@ export default function OrderManager() {
 
       <div style={styles.toolbar}>
         <div style={styles.filterGroup}>
-          <FilterTab id="paid" label="New (Paid)" color="#16a34a" />
+          <FilterTab
+            id="pending"
+            label="Action Required (New)"
+            color="#d97706"
+          />
+          <FilterTab id="paid" label="Approved (Paid)" color="#16a34a" />
           <FilterTab id="label_created" label="Label Created" />
           <FilterTab id="shipped" label="Shipped" />
           <FilterTab id="all" label="All" />

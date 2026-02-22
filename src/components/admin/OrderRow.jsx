@@ -59,7 +59,6 @@ export function OrderRow({
   });
 
   // 🛡️ SAFELY PARSE ITEMS 🛡️
-  // Handles stringified JSON from the new system, or arrays from the old system
   const displayItems = useMemo(() => {
     try {
       if (order.order_items && order.order_items.length > 0) {
@@ -214,6 +213,7 @@ export function OrderRow({
 
   const getStatusStyle = (s) => {
     switch (s) {
+      case "pending": // NEW: Handle pending manual orders
       case "payment_reported":
         return {
           bg: "#fff7ed",
@@ -309,12 +309,13 @@ export function OrderRow({
 
       {isExpanded && (
         <div style={styles.expandedPanel}>
-          {(order.status === "payment_reported" ||
+          {/* VERIFY PAYMENT BOX FOR PENDING ORDERS */}
+          {(order.status === "pending" ||
+            order.status === "payment_reported" ||
             order.status === "pending_contact") && (
             <div
               style={{
-                background:
-                  order.status === "payment_reported" ? "#fff7ed" : "white",
+                background: "#fff7ed",
                 border: "1px solid #fed7aa",
                 borderRadius: "8px",
                 padding: "16px",
@@ -331,14 +332,7 @@ export function OrderRow({
                   gap: "8px",
                 }}
               >
-                {order.status === "payment_reported" ? (
-                  <AlertTriangle size={18} />
-                ) : (
-                  <CheckCircle size={18} />
-                )}
-                {order.status === "payment_reported"
-                  ? "Payment Reported - Verify Now"
-                  : "Mark as Paid"}
+                <AlertTriangle size={18} /> Review Payment Proof
               </h4>
               <div
                 style={{

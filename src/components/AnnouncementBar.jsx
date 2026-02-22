@@ -1,35 +1,42 @@
 import "./AnnouncementBar.css";
-import { Mail } from "lucide-react";
+import { Landmark, Truck, Zap } from "lucide-react";
 
 export default function AnnouncementBar() {
+  // Add as many messages here as you want!
+  const announcements = [
+    {
+      icon: <Landmark size={14} color="#fbbf24" />,
+      text: "Card payments paused — Checkout securely via Bank Transfer!",
+    },
+    {
+      icon: <Truck size={14} color="#fbbf24" />,
+      text: "Free Standard Shipping on orders over $150",
+    },
+    {
+      icon: <Zap size={14} color="#fbbf24" />,
+      text: "Free Express Shipping on orders over $250",
+    },
+  ];
+
   return (
-    <div
-      className="announcement-bar"
-      style={{
-        backgroundColor: "#0f172a",
-        display: "flex",
-        justifyContent: "center",
-        alignItems: "center",
-        gap: "8px",
-      }}
-    >
-      <Mail size={16} color="#fbbf24" />
-      <p
-        style={{
-          margin: 0,
-          color: "white",
-          fontSize: "14px",
-          fontWeight: "500",
-        }}
-      >
-        Our online checkout is temporarily closed. For all orders, please email{" "}
-        <a
-          href="mailto:info@melbournepeptides.com.au"
-          style={{ color: "#fbbf24", textDecoration: "underline" }}
-        >
-          info@melbournepeptides.com.au
-        </a>
-      </p>
+    <div className="announcement-bar">
+      <div className="marquee">
+        <div className="marquee-content">
+          {announcements.map((item, index) => (
+            <span key={index} className="marquee-item">
+              {item.icon} {item.text}
+            </span>
+          ))}
+        </div>
+        {/* Duplicated for infinite seamless scrolling */}
+        <div className="marquee-content" aria-hidden="true">
+          {announcements.map((item, index) => (
+            <span key={`dup-${index}`} className="marquee-item">
+              {item.icon} {item.text}
+            </span>
+          ))}
+        </div>
+      </div>
     </div>
   );
 }
